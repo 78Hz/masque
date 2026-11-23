@@ -49,6 +49,10 @@ static uint8_t backup_hold;
 /* ---------------------------------------------------------------------------------------- the engine --- */
 static volatile uint32_t midi_count;
 static volatile int pc_req = -1;         /* a program change came in: the main loop loads it */
+static int cc_mapped(uint32_t cc);
+#define CCQ 64u
+static volatile uint16_t ccq[CCQ];       /* the sound's CCs (the map below), for the main loop: cc << 8 | value */
+static volatile uint32_t ccq_w, ccq_r;
 static void midi_in(void)                /* audio interrupt: what came in over USB and the TRS jack */
 {
     uint32_t pkt;
@@ -68,7 +72,14 @@ static void midi_in(void)                /* audio interrupt: what came in over U
         case 0x90u: masque_note_on_isr((int)d1, (int)d2); break;
         case 0x80u: masque_note_off_isr((int)d1); break;
         case 0xA0u: masque_pressure_isr((int)d1, (int)d2); break;
-        case 0xB0u: masque_cc_isr((int)d1, (int)d2); break;
+        case 0xB0u:
+            if (cc_mapped(d1)) {         /* a value of the sound: the main loop's, as a knob's */
+                if (ccq_w - ccq_r < CCQ)
+                    ccq[ccq_w++ % CCQ] = (uint16_t)(d1 << 8 | d2);
+            } else {
+                masque_cc_isr((int)d1, (int)d2);
+            }
+            break;
         case 0xD0u: masque_chan_pressure_isr((int)d1); break;
         case 0xE0u: masque_bend_isr((int)(d1 | d2 << 7)); break;
         case 0xC0u: pc_req = (int)d1; break;   /* 0..39 the factory sounds, 40..127 the first user sounds */
@@ -295,7 +306,7 @@ static const pdesc_t ROWS[NSEC][MAXROWS][4] = {
                      {"MODE", K_NAMES, NAME_FMODE, 0, NFMODES - 1, PO(filt.mode)},
                      {"TRK", K_U8, 0, 0, 99, PO(filt.trk)}},
                     {{"EXTRA", K_NAMES, NAME_EXTRA, 0, NEXTRAS - 1, PO(filt.extra)},
-                     {"ENV", K_S8, 0, -99, 99, PO(filt.env.l)}, NONE, NONE}},
+                     {"ENV", K_S8, 0, -99, 99, PO(filt.env.l)}, {"DRIVE", K_U8, 0, 0, 99, PO(filt.drive)}, NONE}},
     [SEC_PITCH] = {{{"START", K_S8, 0, -48, 48, PO(pitch.start)}, {"SPD", K_U8, 0, 0, 40, PO(pitch.spd)},
                     {"END", K_S8, 0, -48, 48, PO(pitch.end)}, NONE}},
     [SEC_LFO1] = {{{"AMT", K_U8, 0, 0, 99, PO(lfo[0].amt)}, {"SPD", K_U8, 0, 0, 99, PO(lfo[0].spd)},
@@ -331,6 +342,76 @@ static const pdesc_t GROWS[2][4] = {
 static const pdesc_t ENVROWS[4][2][4] = {ENV_ROWS(osc[0].env), ENV_ROWS(osc[1].env), ENV_ROWS(noise.env),
                                          ENV_ROWS(filt.env)};
 static const char *const ACTIONS[4] = {"WRITE", "INIT", "REVERT", "SETUP"};
+
+/* ------------------------------------------------------------------------------------------ the CC map --- */
+/* every value of the sound on a MIDI CC (in on the part's channel, out over USB as a knob turns it). A CC's 0..127
+ * covers the value's range evenly; MASK is 14-bit: its CC (20, 21) the top seven bits, CC 52 / 53 the two below */
+#define CC_MASK1_LSB 52u
+#define CC_MASK2_LSB 53u
+typedef struct { uint8_t cc; pdesc_t d; } ccmap_t;
+#define C(n, lab, kind, names, lo, hi, f) {n, {lab, kind, names, lo, hi, PO(f)}}
+static const ccmap_t CCMAP[] = {
+    C(20, "MASK 1", K_U16, 0, 0, 511, osc[0].mask), C(14, "SEMI 1", K_S8, 0, -60, 60, osc[0].semi),
+    C(15, "TUNE 1", K_S8, 0, -99, 99, osc[0].tune), C(16, "START 1", K_S8, 0, -99, 99, osc[0].start),
+    C(17, "SPD 1", K_U8, 0, 0, 99, osc[0].spd), C(18, "LOOP 1", K_NAMES, NAME_LOOP, 0, 2, osc[0].loop),
+    C(19, "LEVEL 1", K_S8, 0, 0, 99, osc[0].env.l),
+    C(21, "MASK 2", K_U16, 0, 0, 511, osc[1].mask), C(22, "SEMI 2", K_S8, 0, -60, 60, osc[1].semi),
+    C(23, "TUNE 2", K_S8, 0, -99, 99, osc[1].tune), C(24, "START 2", K_S8, 0, -99, 99, osc[1].start),
+    C(25, "SPD 2", K_U8, 0, 0, 99, osc[1].spd), C(26, "LOOP 2", K_NAMES, NAME_LOOP, 0, 2, osc[1].loop),
+    C(27, "LEVEL 2", K_S8, 0, 0, 99, osc[1].env.l),
+    C(34, "O1 A", K_U8, 0, 0, 99, osc[0].env.a), C(35, "O1 D", K_U8, 0, 0, 99, osc[0].env.d),
+    C(36, "O1 S", K_U8, 0, 0, 99, osc[0].env.s), C(37, "O1 R", K_U8, 0, 0, 99, osc[0].env.r),
+    C(116, "O1 LOOP", K_U8, NAME_LOOP, 0, 1, osc[0].env.loop),
+    C(39, "O2 A", K_U8, 0, 0, 99, osc[1].env.a), C(40, "O2 D", K_U8, 0, 0, 99, osc[1].env.d),
+    C(41, "O2 S", K_U8, 0, 0, 99, osc[1].env.s), C(42, "O2 R", K_U8, 0, 0, 99, osc[1].env.r),
+    C(43, "O2 LOOP", K_U8, NAME_LOOP, 0, 1, osc[1].env.loop),
+    C(44, "N A", K_U8, 0, 0, 99, noise.env.a), C(45, "N D", K_U8, 0, 0, 99, noise.env.d),
+    C(46, "N S", K_U8, 0, 0, 99, noise.env.s), C(47, "N R", K_U8, 0, 0, 99, noise.env.r),
+    C(48, "N LOOP", K_U8, NAME_LOOP, 0, 1, noise.env.loop),
+    C(49, "F A", K_U8, 0, 0, 99, filt.env.a), C(50, "F D", K_U8, 0, 0, 99, filt.env.d),
+    C(51, "F S", K_U8, 0, 0, 99, filt.env.s), C(114, "F R", K_U8, 0, 0, 99, filt.env.r),
+    C(115, "F LOOP", K_U8, NAME_LOOP, 0, 1, filt.env.loop),
+    C(74, "CUTF", K_U8, 0, 0, 127, filt.cutf), C(71, "RESO", K_U8, 0, 0, 99, filt.reso),
+    C(28, "MODE", K_NAMES, NAME_FMODE, 0, NFMODES - 1, filt.mode), C(29, "TRK", K_U8, 0, 0, 99, filt.trk),
+    C(30, "EXTRA", K_NAMES, NAME_EXTRA, 0, NEXTRAS - 1, filt.extra), C(31, "F ENV", K_S8, 0, -99, 99, filt.env.l),
+    C(75, "DRIVE", K_U8, 0, 0, 99, filt.drive),
+    C(76, "N FREQ", K_U8, 0, 0, 99, noise.freq), C(77, "N TRACK", K_U8, 0, 0, 99, noise.track),
+    C(78, "N LEVEL", K_S8, 0, 0, 99, noise.env.l),
+    C(79, "P START", K_S8, 0, -48, 48, pitch.start), C(80, "P SPD", K_U8, 0, 0, 40, pitch.spd),
+    C(81, "P END", K_S8, 0, -48, 48, pitch.end),
+    C(82, "L1 AMT", K_U8, 0, 0, 99, lfo[0].amt), C(83, "L1 SPD", K_U8, 0, 0, 99, lfo[0].spd),
+    C(84, "L1 DEST", K_NAMES, NAME_LDEST, 0, NLDESTS - 1, lfo[0].dest),
+    C(85, "L1 WAVE", K_NAMES, NAME_LWAVE, 0, NLWAVES - 1, lfo[0].wave),
+    C(86, "L1 DLAY", K_U8, 0, 0, 99, lfo[0].dlay), C(87, "L1 DCAY", K_U8, 0, 0, 99, lfo[0].dcay),
+    C(108, "L2 AMT", K_U8, 0, 0, 99, lfo[1].amt), C(109, "L2 SPD", K_U8, 0, 0, 99, lfo[1].spd),
+    C(110, "L2 DEST", K_NAMES, NAME_LDEST, 0, NLDESTS - 1, lfo[1].dest),
+    C(111, "L2 WAVE", K_NAMES, NAME_LWAVE, 0, NLWAVES - 1, lfo[1].wave),
+    C(112, "L2 DLAY", K_U8, 0, 0, 99, lfo[1].dlay), C(113, "L2 DCAY", K_U8, 0, 0, 99, lfo[1].dcay),
+    C(102, "V-DEST", K_NAMES, NAME_VDEST, 0, NVDESTS - 1, vel.dest), C(103, "V-AMT", K_S8, 0, -99, 99, vel.amt),
+    C(104, "M-DEST", K_NAMES, NAME_MDEST, 0, NMDESTS - 1, wheel.dest), C(105, "M-AMT", K_S8, 0, -99, 99, wheel.amt),
+    C(106, "AT-DEST", K_NAMES, NAME_MDEST, 0, NMDESTS - 1, at.dest), C(107, "AT-AMT", K_S8, 0, -99, 99, at.amt),
+    C(3, "MODE", K_NAMES, NAME_PMODE, 0, NPMODES - 1, gen.mode), C(7, "VOL", K_U8, 0, 0, 99, gen.vol),
+    C(12, "SEMI", K_S8, 0, -24, 24, gen.semi), C(5, "PORT", K_U8, 0, 0, 13, gen.port),
+    C(8, "PANS", K_U8, 0, 0, 99, gen.pans), C(9, "RATE", K_U8, 0, 0, 99, gen.rate),
+    C(13, "BEND", K_U8, 0, 0, 12, gen.bend),
+    C(94, "1TYP", K_FX1, 0, 0, NF1 - 1, fx.t1), C(93, "1BAL", K_U8, 0, 0, 100, fx.b1),
+    C(95, "2TYP", K_FX2, 0, 0, NF2 - 1, fx.t2), C(91, "2BAL", K_U8, 0, 0, 100, fx.b2),
+    C(88, "ARP", K_NAMES, NAME_ARP, 0, NARPS - 1, arp.type), C(89, "ARP SPD", K_SPD2, 0, 10, 200, arp.spd2),
+    C(90, "HOLD", K_U8, NAME_LOOP, 0, 1, arp.hold), C(92, "TRIG", K_U8, NAME_LOOP, 0, 1, arp.trig),
+};
+#undef C
+#define NCCMAP ((int)(sizeof CCMAP / sizeof CCMAP[0]))
+
+static int cc_mapped(uint32_t cc)            /* (the render's, from MIDI in) */
+{
+    int i;
+    if (cc == CC_MASK1_LSB || cc == CC_MASK2_LSB)
+        return 1;
+    for (i = 0; i < NCCMAP; i++)
+        if (CCMAP[i].cc == cc)
+            return 1;
+    return 0;
+}
 
 /* ---------------------------------------------------------------------------------------------- the UI --- */
 static struct {
@@ -452,6 +533,65 @@ static void pset(const pdesc_t *d, int v)
     default: *b = (uint8_t)v; break;
     }
     sound_changed();
+}
+
+static uint8_t mask_msb[2], mask_lsb[2];
+static void cc_apply(uint32_t cc, int v)     /* main loop: a CC of the map came in */
+{
+    int i;
+    if (cc == CC_MASK1_LSB || cc == CC_MASK2_LSB) {
+        int o = cc == CC_MASK2_LSB;
+        mask_lsb[o] = (uint8_t)v;
+        cur.osc[o].mask = (uint16_t)(mask_msb[o] * 4 + (v >> 5));
+        sound_changed();
+        ui.redraw = 1;
+        return;
+    }
+    for (i = 0; i < NCCMAP; i++) {
+        const pdesc_t *d = &CCMAP[i].d;
+        if (CCMAP[i].cc != cc)
+            continue;
+        if (d->kind == K_U16) {              /* MASK: the top seven bits (the two below start again at 0) */
+            int o = cc == 21u;
+            mask_msb[o] = (uint8_t)v;
+            mask_lsb[o] = 0;
+            cur.osc[o].mask = (uint16_t)(v * 4);
+            sound_changed();
+        } else {
+            int n = d->hi - d->lo + 1;
+            pset(d, d->lo + v * n / 128);
+        }
+        ui.redraw = 1;
+        return;
+    }
+}
+
+/* a value turned on the panel goes out as its CC (USB), so a computer can record it */
+static void cc_send_value(const pdesc_t *d)
+{
+    uint32_t ch = set.midi_ch ? set.midi_ch - 1u : 0u;
+    int i;
+    for (i = 0; i < NCCMAP; i++) {
+        const pdesc_t *m = &CCMAP[i].d;
+        uint32_t v;
+        if (m->off != d->off || m->kind == K_GLOB || d->kind == K_GLOB || d->kind == K_NONE)
+            continue;
+        if (m->kind == K_U16) {
+            int o = CCMAP[i].cc == 21u, mask = cur.osc[o].mask;
+            plat_midi_send(0x0Bu | (0xB0u | ch) << 8 | (uint32_t)CCMAP[i].cc << 16 | (uint32_t)(mask >> 2) << 24, TO_USB);
+            plat_midi_send(0x0Bu | (0xB0u | ch) << 8 | (o ? CC_MASK2_LSB : CC_MASK1_LSB) << 16 |
+                           (uint32_t)((mask & 3) << 5) << 24, TO_USB);
+            return;
+        }
+        {
+            int n = m->hi - m->lo + 1, val = pget(m) - m->lo;
+            v = (uint32_t)((val * 128 + n - 1) / n);
+            if (v > 127u)
+                v = 127u;
+        }
+        plat_midi_send(0x0Bu | (0xB0u | ch) << 8 | (uint32_t)CCMAP[i].cc << 16 | v << 24, TO_USB);
+        return;
+    }
 }
 
 /* every value kept in range: a sound loaded from a backup or another version never reaches the engine broken */
@@ -636,6 +776,7 @@ static void knob(int k, int32_t e)
         }
         value_text(d, pget(d), t);
         app_say(d->label, t);
+        cc_send_value(d);
     }
 }
 
@@ -650,6 +791,7 @@ static void mask_turn(int32_t e)
     sound_changed();
     int_text(cur.osc[o].mask, t);
     app_say(o ? "MASK 2" : "MASK 1", t);
+    cc_send_value(&CCMAP[o ? 7 : 0].d);
 }
 
 static void do_write(void)
@@ -816,6 +958,11 @@ static void input(void)
         else
             knob((int)(k - EN_K1), e);
     }
+    while (ccq_r != ccq_w) {
+        uint16_t c = ccq[ccq_r % CCQ];
+        ccq_r++;
+        cc_apply(c >> 8, c & 0x7F);
+    }
     if (pc_req >= 0) {
         int p = pc_req;
         char t[8];
@@ -940,7 +1087,14 @@ static void draw_filter(void)            /* the response, roughly: the cutoff an
         case FM_LP: g = d < 0 ? 1.0f : 1.0f / (1.0f + d * d * (cur.filt.extra == FX_24DB ? 8.0f : 4.0f)); break;
         case FM_HP: g = d > 0 ? 1.0f : 1.0f / (1.0f + d * d * (cur.filt.extra == FX_24DB ? 8.0f : 4.0f)); break;
         case FM_BP: g = 1.0f / (1.0f + d * d * 4.0f); break;
-        default: g = 1.0f - 1.0f / (1.0f + d * d * 30.0f * (1.1f - r)); pk = 0; break;
+        case FM_NOTCH: g = 1.0f - 1.0f / (1.0f + d * d * 30.0f * (1.1f - r)); pk = 0; break;
+        case FM_PEAK: g = 1.0f; break;
+        default: {   /* the comb: teeth at the cutoff's harmonics (between them for COMB-) */
+            float h = fm_exp2f(d), ph = h - (float)(int)h, c = cur.filt.mode == FM_COMBN ? ph - 0.5f : ph < 0.5f ? ph : ph - 1.0f;
+            g = 0.25f + 1.6f * r / (1.0f + 60.0f * c * c) * (h > 0.6f ? 1.0f : 0.0f) / (1.0f + 0.15f * h);
+            pk = 0;
+            break;
+        }
         }
         g += pk;
         {
@@ -1312,6 +1466,10 @@ int app_expect(const char *what, int *got)
         *got = cur.osc[1].mask;
     else if (!strcmp(what, "cutf"))
         *got = cur.filt.cutf;
+    else if (!strcmp(what, "drive"))
+        *got = cur.filt.drive;
+    else if (!strcmp(what, "fmode"))
+        *got = cur.filt.mode;
     else if (!strcmp(what, "octave"))
         *got = set.octave;
     else if (!strcmp(what, "voices"))

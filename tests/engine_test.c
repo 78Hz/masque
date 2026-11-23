@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 199309L
+#define _DEFAULT_SOURCE
 /* SPDX-License-Identifier: MPL-2.0 */
 /* MASQUE — the engine alone, on a computer: every factory sound played (a chord, held, then let go) into
  * build/wav/, and checks: the sound is finite, it is heard, it is not too loud, it ends; the play modes allocate as
@@ -235,6 +236,49 @@ static void masks(void)
     }
 }
 
+/* the filter: the comb rings at its cutoff's pitch; full resonance and drive stay bounded */
+static void filter(void)
+{
+    static float L[44100], R[44100];
+    mq_patch_t p;
+    int i, best = 0;
+    double bm = 0, pk = 0;
+    preset_init(&p);
+    p.osc[0].env.l = 0;                    /* noise alone, through a comb tuned to A (69: 440 Hz) */
+    p.noise.freq = 99;
+    p.noise.env.l = 70; p.noise.env.s = 99; p.noise.env.d = 0;
+    p.filt.mode = FM_COMBP; p.filt.cutf = 69; p.filt.reso = 99; p.filt.trk = 0;
+    masque_panic(); masque_set_patch(&p); run(0, 0, 256);
+    masque_note_on(60, 100);
+    run(L, R, 44100);
+    masque_note_off(60);
+    for (i = 300; i < 700; i += 2) {        /* the strongest partial, by a plain DFT */
+        double re = 0, im = 0, m;
+        int n;
+        for (n = 4410; n < 44100; n++) {
+            re += L[n] * cos(2 * M_PI * i * n / FS);
+            im += L[n] * sin(2 * M_PI * i * n / FS);
+        }
+        m = re * re + im * im;
+        if (m > bm) { bm = m; best = i; }
+    }
+    CHECK(best > 425 && best < 455, "COMB+: rings at %d Hz, not 440", best);
+    run(0, 0, (uint32_t)FS * 2);
+    /* a low pass at full resonance and full drive, a saw into it: loud, but bounded */
+    preset_init(&p);
+    p.osc[0].mask = 23; p.osc[0].env.s = 99;
+    p.filt.mode = FM_LP; p.filt.cutf = 60; p.filt.reso = 99; p.filt.drive = 99; p.filt.extra = FX_24DB;
+    p.filt.env.l = 60; p.filt.env.d = 50; p.filt.env.loop = 1;
+    masque_panic(); masque_set_patch(&p); run(0, 0, 256);
+    masque_note_on(36, 127); masque_note_on(48, 127); masque_note_on(60, 127);
+    pk = run(L, R, 44100);
+    CHECK(pk < 6.0, "DRIVE + RESO 99: peak %.2f", pk);
+    CHECK(rms(L, 44100) > 0.05, "DRIVE + RESO 99: silent (rms %.3f)", rms(L, 44100));
+    masque_note_off(36); masque_note_off(48); masque_note_off(60);
+    run(0, 0, (uint32_t)FS * 3);
+    printf("filter: comb at %d Hz; driven resonance peak %.2f\n", best, pk);
+}
+
 static void cost(void)
 {
     mq_patch_t p;
@@ -269,6 +313,7 @@ int main(int argc, char **argv)
         for (p = 0; p < PRESET_COUNT; p++)
             play_preset(p, 1);
         modes();
+        filter();
         cost();
     }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);

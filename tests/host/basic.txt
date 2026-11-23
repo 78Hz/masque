@@ -44,9 +44,17 @@ expect sec 4
 shot filter.png
 turn K1 -10
 expect cutf 76
-# SELECT walks the rows: FILTER's second row, then PITCH
+# SELECT walks the rows: FILTER's second row (EXTRA, ENV, DRIVE), then PITCH
 turn SELECT 1
 expect row 1
+turn K3 30
+expect drive 30
+turn SELECT -1
+turn K3 5
+expect fmode 5
+shot filter_comb.png
+turn K3 -5
+turn SELECT 1
 turn SELECT 1
 expect sec 5
 # LFO, EDIT, FX, ARP, SEQ, GLO
@@ -133,3 +141,17 @@ expect user0 1
 tap HOME
 expect sec 0
 shot home_user.png
+# the CC map: CUTF on CC 74, MASK 1 on CC 20 (and its two low bits on CC 52); a knob's turn goes out as its CC
+tap HOME
+midi USB B0 4A 40
+wait 50
+expect cutf 64
+midi USB B0 14 1F
+wait 50
+expect mask1 124
+midi USB B0 34 60
+wait 50
+expect mask1 127
+out
+turn K3 1
+expect_out USB B0 4A 41

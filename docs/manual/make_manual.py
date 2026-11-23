@@ -169,8 +169,8 @@ S.append(P("MASQUE is an independent project. It is not made, endorsed or suppor
 S.append(table([["", ""],
                 ["Voices", "10 by default (4 to 12), two bitmask oscillators and a noise each"],
                 ["Oscillators", "512 masks each, plus three sub-masks between each pair; 4x oversampled"],
-                ["Filter", "2-pole state-variable, LP / HP / BP / NOTCH, self-resonant, key tracking; 24 dB or a "
-                           "fixed second filter (EXTRA)"],
+                ["Filter", "2-pole state-variable with DRIVE and saturating resonance: LP / HP / BP / NOTCH / PEAK, "
+                           "and a tuned comb (COMB+ / COMB−); key tracking; 24 dB or a fixed second filter (EXTRA)"],
                 ["Envelopes", "4 loopable ADSRs per voice (OSC 1, OSC 2, NOISE, FILTER); delta envelopes for each "
                               "oscillator's mask and for pitch"],
                 ["LFOs", "2, eight waves, 16 destinations, delay and decay"],
@@ -322,12 +322,25 @@ S.append(P("A random value held and renewed FREQ times a second: 99 is white noi
            "few values a second. TRACK makes higher keys renew it faster. ENV gives its envelope."))
 S.append(P("FILTER", h2))
 S.append(knobs([["1", "CUTF 0–127", "RESO 0–99", "MODE LP / HP / BP / NOTCH", "TRK 0–99 %"],
-                ["2", "EXTRA", "ENV −99…+99", "", ""]]))
+                ["2", "EXTRA", "ENV −99…+99", "DRIVE 0–99", ""]]))
 S.append(Spacer(1, 5))
-S.append(P("A two-pole (12 dB/oct) state-variable filter that self-oscillates near the top of RESO. CUTF is in "
-           "semitones: 60 is middle C's frequency, 127 about 12.5 kHz. TRK follows OSC 1's pitch. NOTCH is "
-           "deepest with RESO at 0. <b>EXTRA</b>: 12DB (one filter), 24DB (the filter twice in series), LP1–LP7 "
-           "or HP1–HP7 (a fixed low or high pass after it: LP1 350 Hz to LP7 9 kHz, HP1 40 Hz to HP7 1.6 kHz). "
+S.append(P("A two-pole (12 dB/oct) state-variable filter that self-oscillates near the top of RESO. Its resonance "
+           "saturates, so pushed hard it growls instead of clipping, and stays bounded. <b>DRIVE</b> overdrives the "
+           "sound into it (and into the comb). CUTF is in semitones: 60 is middle C's frequency, 127 about 12.5 kHz. "
+           "TRK follows OSC 1's pitch."))
+S.append(table([["MODE", "What"],
+                ["LP, HP, BP", "low, high and band pass"],
+                ["NOTCH", "a narrow cut at the cutoff, deepest with RESO at 0"],
+                ["PEAK", "the resonant band added to the sound: nothing is cut, a bump rises at the cutoff"],
+                ["COMB+", "a delay line one period of the cutoff long, fed back by RESO: a pitched resonator. Fed "
+                          "noise or a short sound it becomes a plucked string or a struck tube (P16 KARPLUS). With "
+                          "TRK at 99 it plays the keys' pitches; the filter envelope bends it"],
+                ["COMB−", "the same with the feedback inverted: hollower, an octave lower, odd harmonics"]],
+               [24 * mm, W - 24 * mm]))
+S.append(Spacer(1, 4))
+S.append(P("<b>EXTRA</b>: 12DB (one filter), 24DB (a second, clean stage after it: four poles, one peak), LP1–LP7 "
+           "or HP1–HP7 (a fixed low or high pass after it: LP1 350 Hz to LP7 9 kHz, HP1 40 Hz to HP7 1.6 kHz; after the comb "
+           "too, to darken or thin it). "
            "<b>ENV</b> is how far the filter envelope moves the cutoff, up or down; it is the same value as L on "
            "the filter's ENV page."))
 S.append(P("PITCH", h2))
@@ -457,7 +470,7 @@ S.append(table([["Action", "What"],
 S.append(P("Writing to flash stops the sound for a moment: write between pieces.", small))
 S.append(P("Factory sounds", h2))
 names = ["MASQUE", "GLASS BELL", "MARIMBA", "SAW SQUARE", "VAPOUR", "BUZZ LEAD", "PULSE PAD", "MASK SWEEP",
-         "SUPER SQ", "DRAWBARS", "TINE KEYS", "SQUARE ARP", "FORMANT", "VOX", "BRASS", "STRINGS", "SHRILL",
+         "SUPER SQ", "DRAWBARS", "TINE KEYS", "SQUARE ARP", "FORMANT", "VOX", "BRASS", "STRINGS", "KARPLUS",
          "KICK HAT", "CLAP ECHO", "WIND", "SUB BASS", "ACID", "DRONE", "BIT PAD", "RING BELL", "KOTO", "HARP",
          "SOFT SAW", "WARM POLY", "FLUTE", "CLAV", "BLEEPS", "DEEP SPACE", "TAPE KEYS", "ZAPPER", "SLUR LEAD",
          "MOLY PAD", "PARA STRGS", "FOLD BASS", "PHASE PAD"]
@@ -466,7 +479,7 @@ S.append(table(rows, [W / 4] * 4, head=False))
 S.append(Spacer(1, 4))
 S.append(P("Good places to start: P00 MASQUE (bouncing mask envelopes), P01 GLASS BELL and P02 MARIMBA (masks 29 "
            "and 30), P05 BUZZ LEAD (mask 78), P07 MASK SWEEP (a looping mask envelope), P12 FORMANT (REPEAT "
-           "masks), P35–P37 (the SLUR, MOLY and PARA modes).", small))
+           "masks), P16 KARPLUS (the comb), P21 ACID (DRIVE), P35–P37 (the SLUR, MOLY and PARA modes).", small))
 
 # ------------------------------------------------------------------------------------------------ midi
 S.append(PageBreak())
@@ -478,11 +491,36 @@ S.append(table([["", ""],
                 ["Controllers", "pitch bend; CC 1 mod wheel; CC 64 sustain; CC 120 and 123 all off"],
                 ["Program change", "0–39 the factory sounds, 40–127 U000–U087"],
                 ["Clock", "clock, start, stop: the arpeggiator follows"],
-                ["Out (USB)", "the FM-1's keys and their pressure"]][1:],
+                ["Sound values", "every value of the sound on its own CC (the map below)"],
+                ["Out (USB)", "the FM-1's keys and their pressure, and each value as you turn it, as its CC, so a "
+                              "computer can record your edits and play them back"]][1:],
                [32 * mm, W - 32 * mm], head=False))
 S.append(P("The FM-1 has no pitch or mod wheel: those come only from an external controller over MIDI.", small))
+S.append(P("The CC map", h2))
+S.append(P("A CC's 0–127 covers the value's whole range (a choice such as MODE or DEST in equal bands). MASK is "
+           "14-bit: CC 20 / 21 carry its top seven bits and CC 52 / 53 the two below, so a controller that sends "
+           "only CC 20 moves it four masks at a time and one that sends both reaches every mask."))
+S.append(table([["Section", "CC: value"],
+                ["OSC 1", "20 MASK (52 its low bits), 14 SEMI, 15 TUNE, 16 START, 17 SPD, 18 LOOP, 19 LEVEL"],
+                ["OSC 2", "21 MASK (53 its low bits), 22 SEMI, 23 TUNE, 24 START, 25 SPD, 26 LOOP, 27 LEVEL"],
+                ["OSC 1 ENV", "34 A, 35 D, 36 S, 37 R, 116 LOOP"],
+                ["OSC 2 ENV", "39 A, 40 D, 41 S, 42 R, 43 LOOP"],
+                ["NOISE", "76 FREQ, 77 TRACK, 78 LEVEL; ENV 44 A, 45 D, 46 S, 47 R, 48 LOOP"],
+                ["FILTER", "74 CUTF, 71 RESO, 28 MODE, 29 TRK, 30 EXTRA, 31 ENV, 75 DRIVE; "
+                           "ENV 49 A, 50 D, 51 S, 114 R, 115 LOOP"],
+                ["PITCH", "79 START, 80 SPD, 81 END"],
+                ["LFO 1", "82 AMT, 83 SPD, 84 DEST, 85 WAVE, 86 DLAY, 87 DCAY"],
+                ["LFO 2", "108 AMT, 109 SPD, 110 DEST, 111 WAVE, 112 DLAY, 113 DCAY"],
+                ["MOD", "102 V-DEST, 103 V-AMT, 104 M-DEST, 105 M-AMT, 106 AT-DEST, 107 AT-AMT"],
+                ["GENERAL", "3 MODE, 7 VOL, 12 SEMI, 5 PORT, 8 PANS, 9 RATE, 13 BEND"],
+                ["FX", "94 1TYP, 93 1BAL, 95 2TYP, 91 2BAL"],
+                ["ARP", "88 TYPE, 89 SPD, 90 HOLD, 92 TRIG"],
+                ["The part", "1 mod wheel, 64 sustain, 120 and 123 all off"]],
+               [26 * mm, W - 26 * mm]))
+S.append(P("CC values change the sound being edited, as the knobs do: SAVE lights, and WRITE keeps them.", small))
 
 # ------------------------------------------------------------------------------------------------ install
+S.append(PageBreak())
 S.append(P("9  Installing", h1))
 S.append(P("Download <b>masque-X.Y.fwsc</b> from github.com/78Hz/masque (Releases, or the firmware artifact of "
            "the latest Build run). Connect the FM-1 directly to the computer with a USB data cable, switched on "
@@ -505,9 +543,10 @@ for t in ["One part: the MASK1's multitimbral parts, layers and splits are not i
           "The bitmask mapping is a reconstruction from published behaviour, not Kodamo's algorithm; individual "
           "masks other than those Kodamo names will not match the MASK1's.",
           "The 40 factory sounds are MASQUE's own.",
+          "The filter goes further than the MASK1's: DRIVE, a PEAK mode and a tuned comb; MASQUE has its own CC map.",
           "The effect families and numbering follow the MASK1; the effects themselves are MASQUE's own designs, "
           "the reverb a plate.",
-          "The looper keeps 4096 events (the MASK1 10,000); no MIDI CC map beyond CC 1, 64, 120 and 123."]:
+          "The looper keeps 4096 events (the MASK1 10,000)."]:
     S.append(P("•  " + t, ParagraphStyle("bl", parent=body, leftIndent=10, firstLineIndent=-8, spaceAfter=3)))
 S.append(Spacer(1, 8))
 S.append(P("MASQUE is open source under the Mozilla Public License 2.0, built on fm1-base and felucca-bsp. Its "

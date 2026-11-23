@@ -243,14 +243,16 @@ void preset_get(int n, mq_patch_t *p)
         p->gen.pans = 70;
         FXS(p, F1_CH + 7, 55, F2_RV + 13, 40);
         break;
-    case 16:
-        NAME(p, "SHRILL");
-        O(p, 0, 1, -48, 0); O(p, 1, 3, -36, 5);
-        E(&p->osc[0].env, 70, 0, 50, 70, 30, 0);
-        E(&p->osc[1].env, 52, 0, 50, 70, 30, 0);
-        F(p, 70, 45, FM_LP, 50, FX_24DB); E(&p->filt.env, 30, 0, 50, 20, 30, 0);
-        p->gen.mode = PM_MONO; p->gen.port = 2;
-        FXS(p, F1_OFF, 0, F2_DL + 3, 25);
+    case 16:  /* the comb: a noise burst into a tuned delay line, a string plucked */
+        NAME(p, "KARPLUS");
+        O(p, 0, 7, -12, 0);
+        E(&p->osc[0].env, 50, 0, 36, 0, 30, 0);
+        p->noise.freq = 99; E(&p->noise.env, 99, 0, 40, 0, 34, 0);
+        F(p, 60, 97, FM_COMBP, 99, FX_LP1 + 5);
+        E(&p->filt.env, 0, 0, 40, 0, 40, 0);
+        p->vel.dest = VD_VOL; p->vel.amt = 60;
+        p->gen.pans = 40;
+        FXS(p, F1_OFF, 0, F2_RV + 7, 26);
         break;
     case 17:  /* a kick from the pitch envelope, a hat from the noise */
         NAME(p, "KICK HAT");
@@ -297,6 +299,7 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[0].env, 80, 0, 50, 80, 14, 0);
         E(&p->osc[1].env, 0, 0, 50, 80, 14, 0);
         F(p, 40, 82, FM_LP, 30, FX_24DB); E(&p->filt.env, 50, 0, 36, 0, 20, 0);
+        p->filt.drive = 55;
         p->vel.dest = VD_FEG; p->vel.amt = 70;
         p->gen.mode = PM_SLUR; p->gen.port = 3; p->gen.pans = 0;
         FXS(p, F1_DT + 3, 35, F2_DL + 4, 20);

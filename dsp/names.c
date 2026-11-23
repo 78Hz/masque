@@ -3,7 +3,7 @@
 #include "masque.h"
 
 static const char *const N_LOOP[NLOOPS] = {"NO", "YES", "BIDI"};
-static const char *const N_FMODE[NFMODES] = {"LP", "HP", "BP", "NOTCH"};
+static const char *const N_FMODE[NFMODES] = {"LP", "HP", "BP", "NOTCH", "PEAK", "COMB+", "COMB-"};
 static const char *const N_EXTRA[NEXTRAS] = {"12DB", "24DB", "LP1", "LP2", "LP3", "LP4", "LP5", "LP6", "LP7",
                                              "HP1", "HP2", "HP3", "HP4", "HP5", "HP6", "HP7"};
 static const char *const N_PMODE[NPMODES] = {"POLY", "MONO", "SLUR", "MONO PORTA", "PARA", "MOLY", "PARA SLUR",

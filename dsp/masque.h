@@ -15,7 +15,9 @@
 
 /* ---------------------------------------------------------------------------------------------- enums --- */
 enum { LOOP_NO, LOOP_YES, LOOP_BIDI, NLOOPS };                         /* the mask envelope's loop */
-enum { FM_LP, FM_HP, FM_BP, FM_NOTCH, NFMODES };                       /* the filter's mode */
+/* the filter's mode: the state-variable's four outputs, its peak (the band added), and a comb (a delay line tuned to the
+ * cutoff, fed back with RESO: positive, or negative for the hollow, octave-down kind) */
+enum { FM_LP, FM_HP, FM_BP, FM_NOTCH, FM_PEAK, FM_COMBP, FM_COMBN, NFMODES };
 /* the second filter: off (12 dB), the first doubled (24 dB), or a fixed low or high pass after it */
 enum { FX_12DB, FX_24DB, FX_LP1, FX_LP7 = FX_LP1 + 6, FX_HP1, FX_HP7 = FX_HP1 + 6, NEXTRAS };
 enum { PM_POLY, PM_MONO, PM_SLUR, PM_MONO_PORTA, PM_PARA, PM_MOLY, PM_PARA_SLUR, PM_MONO_RETRIG, PM_POLY_RETRIG, NPMODES };
@@ -58,7 +60,7 @@ typedef struct {
     char name[10];                         /* upper case, spaces padded, no terminator needed */
     mq_osc_t osc[2];
     struct { uint8_t freq, track; mq_env_t env; } noise;   /* FREQ 0..99 (99 white), TRACK 0..99 % */
-    struct { uint8_t cutf, reso, mode, trk, extra, rsv; mq_env_t env; } filt;   /* CUTF 0..127, RESO 0..99, TRK 0..99 */
+    struct { uint8_t cutf, reso, mode, trk, extra, drive; mq_env_t env; } filt;   /* CUTF 0..127, RESO, TRK, DRIVE 0..99 */
     struct { int8_t start; uint8_t spd; int8_t end; uint8_t rsv; } pitch;   /* semitones -48..48, SPD 0..40 */
     struct { uint8_t amt, spd, dest, wave, dlay, dcay; } lfo[2];
     struct { uint8_t dest; int8_t amt; } vel, wheel, at;   /* AMT -99..99 */

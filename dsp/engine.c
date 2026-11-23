@@ -15,6 +15,16 @@
 #define OS 4u                              /* the oscillators' oversampling */
 #define NSTEP (MQ_BLOCK_MAX / CR)
 #define DT ((float)CR / FS)
+#define COMB_N 512u                        /* each voice's comb line: down to 86 Hz */
+
+static float combbuf[MQ_MAX_VOICES][COMB_N] PLAT_POOL;
+
+/* a soft clip: straight near 0, round to +-1 at +-1.5 and held there (the filter's saturation) */
+static inline __attribute__((always_inline)) float csat(float x)
+{
+    x = x > 1.5f ? 1.5f : x < -1.5f ? -1.5f : x;
+    return x - 0.148148f * x * x * x;
+}
 
 float bm_sin[BM_SIN_N + 1];
 
@@ -55,6 +65,8 @@ typedef struct {
     float s1, s2, s3, s4, s5, s6;          /* the filters' states */
     float out_pk;                          /* the loudest sample of the last step: a ringing filter keeps it alive */
     float fg, fk, fg_to;                   /* the filter's coefficients */
+    float cd, cd_to, clp;                  /* the comb: its length now and at the step's end (samples), its damping */
+    uint32_t cw;                           /* where the comb writes */
     float h4[6], h2[14];                   /* the decimators' histories */
 } voice_t;
 
@@ -71,6 +83,8 @@ static struct {
     float x2g, x2k;                        /* the fixed second filter (LP1..7, HP1..7) */
     int x2hp;
     float fk;                              /* the filter's damping from RESO */
+    float cfb;                             /* the comb's feedback from RESO (its sign from the mode) */
+    float drive, dcomp;                    /* DRIVE: the gain into the filter, and back out */
     float port_c;                          /* the glide's coefficient a step, 0: none */
     float pspd;                            /* the pitch envelope's speed, semitones a step */
     float mspd[2];                         /* the mask envelopes' speeds, masks a step */
@@ -136,6 +150,9 @@ static void derive(void)
     {   /* RESO: 0 is a gentle damping (Q 0.5), 99 just rings */
         float r = (float)P.filt.reso / 99.0f;
         D.fk = 2.0f - 1.995f * r * (2.0f - r);
+        D.cfb = (P.filt.mode == FM_COMBN ? -1.0f : 1.0f) * (0.35f + 0.63f * fm_sqrtf(r));
+        D.drive = fm_exp2f((float)P.filt.drive / 99.0f * 4.5f);   /* x1 .. x22 */
+        D.dcomp = 1.0f / fm_sqrtf(D.drive);
     }
     D.port_c = P.gen.port ? 1.0f - fm_expf(-DT / (0.004f * fm_exp2f((float)P.gen.port / 1.7f))) : 0.0f;
     D.pspd = P.pitch.spd ? fm_exp2f((float)P.pitch.spd / 4.0f) * DT : 0.0f;   /* 1.2 .. 1024 semitones a second */
@@ -416,6 +433,12 @@ static void voice_control(voice_t *v, uint32_t step)
         if (hz > 0.45f * FS) hz = 0.45f * FS;
         v->fg_to = fm_tanf(FM_PI * hz / FS);
         v->fk = D.fk;
+        if (P.filt.mode >= FM_COMBP) {     /* the comb's length: one period of the cutoff */
+            float d = FS / (hz < 90.0f ? 90.0f : hz);
+            v->cd_to = d < 2.0f ? 2.0f : d;
+            if (v->cd < 0.0f)
+                v->cd = v->cd_to;          /* a new voice: tuned from its first sample */
+        }
     }
 }
 
@@ -505,28 +528,60 @@ static void voice_block(voice_t *v, float *outl, float *outr, uint32_t n, uint32
             v->nph = ph;
         }
         v->ng = v->ng_to;
-        /* the filter: Simper's state-variable (trapezoidal), its cutoff gliding over the step */
+        /* the filter: Simper's state-variable (trapezoidal), its cutoff gliding over the step; DRIVE into it and its
+         * band state saturating, so the resonance growls and self-oscillates without running away. Or the comb */
         fg = v->fg;
         dfg = (v->fg_to - fg) / (float)k;
         {
             float k_ = v->fk, s1 = v->s1, s2 = v->s2, s3 = v->s3, s4 = v->s4, s5 = v->s5, s6 = v->s6;
-            int mode = P.filt.mode, x = P.filt.extra;
-            for (j = 0; j < k; j++) {
+            float dr = D.drive, dc = D.dcomp;
+            int mode = P.filt.mode, x = P.filt.extra, sat = P.filt.drive > 0;
+            if (mode >= FM_COMBP) {
+                float *cb = combbuf[v - V], cd = v->cd, dcd = (v->cd_to - v->cd) / (float)k, fb = D.cfb, lp = v->clp;
+                uint32_t w = v->cw;
+                for (j = 0; j < k; j++) {
+                    float r = (float)w - cd, f, a, b, in = y[j];
+                    int i;
+                    if (r < 0.0f) r += (float)COMB_N;
+                    i = (int)r;
+                    f = r - (float)i;
+                    a = cb[i & (COMB_N - 1)];
+                    b = cb[(i + 1) & (COMB_N - 1)];
+                    lp += 0.82f * (a + f * (b - a) - lp);   /* a little damping in the loop: the highs die first */
+                    if (sat)
+                        in = csat(in * dr) * dc;
+                    in = csat((in + fb * lp) * 0.6667f) * 1.5f;
+                    cb[w] = in;
+                    w = (w + 1u) & (COMB_N - 1);
+                    y[j] = in * (1.0f - 0.3f * fm_fabsf(fb));
+                    cd += dcd;
+                }
+                v->cw = w;
+                v->clp = fm_flush(lp);
+                v->cd = v->cd_to;
+            } else for (j = 0; j < k; j++) {
                 float g = fg, a1 = 1.0f / (1.0f + g * (g + k_)), a2 = g * a1, a3 = g * a2, v0 = y[j], v1, v2, v3, o;
+                if (sat)
+                    v0 = csat(v0 * dr) * dc;
                 v3 = v0 - s2;
                 v1 = a1 * s1 + a2 * v3;
                 v2 = s2 + a2 * s1 + a3 * v3;
                 s1 = 2.0f * v1 - s1;
+                s1 = 4.0f * csat(0.25f * s1);   /* (about +-4 the band state is held: bounded resonance) */
                 s2 = 2.0f * v2 - s2;
-                o = mode == FM_LP ? v2 : mode == FM_HP ? v0 - k_ * v1 - v2 : mode == FM_BP ? v1 : v0 - k_ * v1;
-                if (x == FX_24DB) {        /* the same again, in series */
+                o = mode == FM_LP ? v2 : mode == FM_HP ? v0 - k_ * v1 - v2 : mode == FM_BP ? v1 :
+                    mode == FM_NOTCH ? v0 - k_ * v1 : v0 + 2.0f * k_ * v1;   /* PEAK: the band added */
+                if (x == FX_24DB) {        /* a second, clean stage (Butterworth): four poles, one peak */
+                    const float kb = 1.4142136f;
+                    float b1 = 1.0f / (1.0f + g * (g + kb)), b2 = g * b1, b3 = g * b2;
                     v0 = o;
                     v3 = v0 - s4;
-                    v1 = a1 * s3 + a2 * v3;
-                    v2 = s4 + a2 * s3 + a3 * v3;
+                    v1 = b1 * s3 + b2 * v3;
+                    v2 = s4 + b2 * s3 + b3 * v3;
                     s3 = 2.0f * v1 - s3;
                     s4 = 2.0f * v2 - s4;
-                    o = mode == FM_LP ? v2 : mode == FM_HP ? v0 - k_ * v1 - v2 : mode == FM_BP ? v1 : v0 - k_ * v1;
+                    o = mode == FM_LP ? v2 : mode == FM_HP ? v0 - kb * v1 - v2 : mode == FM_BP ? v1 :
+                        mode == FM_NOTCH ? v0 - kb * v1 : o;
                 } else if (x >= FX_LP1) {  /* a fixed second filter */
                     float h = D.x2g, b1 = 1.0f / (1.0f + h * (h + D.x2k)), b2 = h * b1, b3 = h * b2;
                     v0 = o;
@@ -539,6 +594,17 @@ static void voice_block(voice_t *v, float *outl, float *outr, uint32_t n, uint32
                 }
                 y[j] = o;
                 fg += dfg;
+            }
+            if (mode >= FM_COMBP && x >= FX_LP1) {   /* the comb, then a fixed filter too */
+                for (j = 0; j < k; j++) {
+                    float h = D.x2g, b1 = 1.0f / (1.0f + h * (h + D.x2k)), b2 = h * b1, b3 = h * b2, v0 = y[j], v1, v2, v3;
+                    v3 = v0 - s6;
+                    v1 = b1 * s5 + b2 * v3;
+                    v2 = s6 + b2 * s5 + b3 * v3;
+                    s5 = 2.0f * v1 - s5;
+                    s6 = 2.0f * v2 - s6;
+                    y[j] = D.x2hp ? v0 - D.x2k * v1 - v2 : v2;
+                }
             }
             v->s1 = fm_flush(s1);
             v->s2 = fm_flush(s2);
@@ -688,6 +754,15 @@ static void voice_start(voice_t *v, int key, float vel, int retrig, int glide_fr
         for (i = 0; i < 14; i++) v->h2[i] = 0.0f;
         v->rng = 0x9E3779B9u ^ (uint32_t)key * 2654435761u ^ age_now;
         v->fg = v->fg_to = 0.1f;
+        v->cd = -1.0f;
+        v->cd_to = 100.0f;
+        v->clp = 0.0f;
+        {
+            uint32_t c;
+            float *cb = combbuf[v - V];
+            for (c = 0; c < COMB_N; c++)
+                cb[c] = 0.0f;
+        }
         for (e = 0; e < NENV; e++)
             v->env[e].lvl = 0.0f;
     }

@@ -3,7 +3,7 @@
 ![MASQUE's screens](docs/img/screens.png)
 
 A bitmask synthesizer for the M-VAVE FM-1, after Kodamo's MASK1: two bitmask oscillators a voice, a sample-and-hold
-noise, a resonant state-variable filter, four loopable envelopes, mask and pitch delta envelopes, two LFOs, the
+noise, a driven, saturating state-variable filter (LP, HP, BP, NOTCH, PEAK, and a tuned comb), four loopable envelopes, mask and pitch delta envelopes, two LFOs, the
 MASK1's nine play modes with slur detection, an arpeggiator, a looper and two effects. Ten voices (up to twelve),
 forty factory sounds, 128 of your own.
 
@@ -70,7 +70,9 @@ its values in rows of four (K1..K4) and SELECT walks the rows. **The user manual
 
 The FM-1's keys play with velocity, and their pressure is each voice's aftertouch (poly). MIDI comes in over USB
 and the TRS jack: notes, velocity, poly and channel aftertouch, pitch bend, the mod wheel (CC 1), sustain (CC 64),
-all notes off, program changes and MIDI clock (the arpeggiator follows it). The FM-1's own keys go out over USB.
+all notes off, program changes and MIDI clock (the arpeggiator follows it), and every value of the sound on its
+own CC (the map is in the manual; MASK is 14-bit). The FM-1's own keys go out over USB, and so does each value as a
+knob turns it.
 
 ## Building
 
@@ -122,7 +124,8 @@ A tag `vX.Y`, or running the Build workflow by hand with a version, builds every
 - The effects are the MASK1's families and numbering (CH, DT, BC, RM; DL, RV, DT), each sixteen of MASQUE's own;
   the reverbs are KIST-P's plate (Dattorro's) in sixteen sizes.
 - The looper keeps 4096 events (the MASK1 10000).
-- No MIDI CC map beyond CC 1, 64, 120 and 123.
+- The filter has more than the MASK1's: DRIVE, a PEAK mode and a tuned comb.
+- MASQUE's own CC map.
 
 ## Not yet known
 
