@@ -50,7 +50,7 @@ XOR, a multiply and a table read.
 ## Playing it
 
 The MASK1 edits a section at a time with a Value knob; the FM-1 has four knobs under the screen, so each page shows
-its values in rows of four (K1..K4) and SELECT walks the rows. **The player's manual is [docs/MANUAL.md](docs/MANUAL.md).**
+its values in rows of four (K1..K4) and SELECT walks the rows. **The user manual is [docs/manual/MASQUE-manual.pdf](docs/manual/MASQUE-manual.pdf)** (the synthesis method and every page; made by `docs/manual/make_manual.py`); a shorter reference is [docs/MANUAL.md](docs/MANUAL.md).
 
 | Control | What |
 |---|---|
@@ -94,6 +94,7 @@ Download `masque-X.Y.fwsc` from the [latest release](https://github.com/78Hz/mas
 
 - **FM-1 Manager** (the same release, for macOS, Windows and Linux): open it, add the file under Firmware and press
   *Install on FM-1*. It also takes backups and puts M-VAVE's firmware back. See [manager/](manager/).
+- The [user manual](docs/manual/MASQUE-manual.pdf) explains the instrument for players.
 - **The command line**: `python3 fm1-base/tools/fm1_install.py masque-X.Y.fwsc`
   (`pip install mido python-rtmidi` first).
 

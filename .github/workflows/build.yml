@@ -178,7 +178,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4             # for the manual (docs/MANUAL.md)
+      - uses: actions/checkout@v4             # for the manual (docs/manual/MASQUE-manual.pdf)
         with:
           path: src
       - uses: actions/download-artifact@v4
@@ -197,7 +197,7 @@ jobs:
           cp art/firmware/*.fwsc art/firmware/*firmware.json art/firmware/SHA256SUMS files/
           cp art/firmware/home_playing.png files/masque-screen.png 2>/dev/null || true
           find art -path 'art/manager-*' -type f -exec cp {} files/ \;
-          cp src/docs/MANUAL.md files/MASQUE-manual.md 2>/dev/null || true
+          cp src/docs/manual/MASQUE-manual.pdf files/ 2>/dev/null || true
           ls -la files
           cat > notes.md <<NOTES
           MASQUE $version for the M-VAVE FM-1, and FM-1 Manager.
@@ -206,7 +206,7 @@ jobs:
             Manager, or \`python3 fm1-base/tools/fm1_install.py masque-$version.fwsc\`.
           - **FM-1 Manager**: macOS (Apple silicon / Intel), Windows, Linux. It installs any FM-1 firmware, puts
             M-VAVE's back, and keeps backups; it comes with this MASQUE. See [manager/](https://github.com/$GH_REPO/tree/$tag/manager).
-          - **MASQUE-manual.md**: the player's manual: the panel, the pages, the masks, and installing.
+          - **MASQUE-manual.pdf**: the user manual: bitmask synthesis, the panel, every page, and installing.
 
           Take a whole-flash backup before the first install (FM-1 Manager → Whole flash). Install at your own
           risk, and report what you find.
