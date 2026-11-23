@@ -22,18 +22,18 @@ oscillators and a noise, mixed into a resonant filter; four envelopes shape them
 | SEL | OSC 1 → OSC 2 → NOISE → FILTER |
 | ENV | lit: the section's envelope instead of its settings (OSC 1, OSC 2, NOISE, FILTER) |
 | LFO | LFO 1 ↔ LFO 2 |
-| EDIT | PITCH → MOD → GENERAL |
+| EDIT | PITCH → MATRIX → GENERAL |
 | FX | the effects |
 | ARP | the arpeggiator; pressed again on its page: HOLD on / off. Lit while it plays |
 | SEQ | the looper's page |
 | REC | the looper: waits for the first note (blinking), records (lit); again: plays the loop |
 | PLAY | the loop plays (green) or stops |
-| GLO | the part's settings (GLOBAL) |
+| GLO | the part's settings (GLOBAL); again: TUNING |
 | SAVE | lit while the sound is edited. Press: the WRITE page; press again: its action |
 | SELECT | the next row, the next page |
-| ALGORITHM | MASK of the oscillator shown (OSC 1 on the other pages). A quick turn goes four at a time |
+| ALGORITHM | MASK of the oscillator shown (OSC 1 on the other pages; on MATRIX, the matrix's row). A quick turn goes four at a time |
 | PRESETS | the next sound; it loads when the knob rests a quarter of a second |
-| OCT- / OCT+ | the FM-1's keys an octave down / up (-3..+3); both together: 0 |
+| OCT- / OCT+ | the FM-1's keys an octave of the tuning down / up (-3..+3); both together: 0 |
 | MASTER | the volume |
 
 ## The masks
@@ -122,16 +122,35 @@ O2 MASK, N FREQ, N VOL, FX1 TYP, FX2 TYP, FX2 BAL. **WAVE**: SIN, SQR, UP, DOWN,
 stairs), HSIN (half sines), RAND (sample and hold). **DLAY**: the LFO waits this long after the first key, then fades
 in (not while the mod wheel or aftertouch moves its amount or speed). **DCAY**: it fades out after this long (0: never).
 
-## MOD
+## MATRIX
+
+Eight rows, each a source sent to a destination; kept with the sound. Each row takes two rows of knobs (SELECT
+walks them; on this page ALGORITHM jumps from row to row):
 
 | Row | K1 | K2 | K3 | K4 |
 |---|---|---|---|---|
-| 1 | V-DEST | V-AMT -99..+99 | M-DEST | M-AMT -99..+99 |
-| 2 | AT-DEST | AT-AMT -99..+99 | | |
+| A | SRC | DEST | AMT -99..+99 | CURVE LIN / SOFT / HARD / S / BIP |
+| B | LO 0..99 | HI 1..100 | SMOOTH 0..99 | ZONE ALL / LO / HI |
 
-Velocity (V): FLT, F EG (the filter envelope's amount), VOL, MASK, P EG (the pitch envelope's START), ATK (the
-attacks). The mod wheel (M, MIDI CC 1) and aftertouch (AT: the FM-1's key pressure, or MIDI's): FLT, LFO1 AMT, LFO1
-SPD, LFO2 AMT, LFO2 SPD, VOL, MASK, FREQ, O1 VOL, O1 MASK, O2 VOL, O2 MASK, N FREQ, N VOL, FX1 BAL, FX2 BAL.
+**Sources**: VEL (velocity), REL VEL (release velocity), PRESS (MPE pressure: a Member Channel's), AT (aftertouch:
+the FM-1's keys' pressure, poly aftertouch, or a channel's), TIMBRE (MPE's CC74), BEND (the note's bend), WHEEL
+(CC 1), KEY (the key, around middle C), LFO1, LFO2, F ENV (the filter envelope), RAND (a value of its own for each
+note), and CC 0..127. **Destinations**, each voice's: PITCH, O1 PITCH, O2 PITCH (up to 24 steps), MASK, O1 MASK, O2
+MASK (up to 128 masks, through the sub-masks), MASK SPD (the mask envelopes' speed), VOL, O1 VOL, O2 VOL, N VOL,
+N FREQ, CUTF (up to 72 semitones), RESO, DRIVE, F ENV and P ENV (the envelopes' depth), ATK and REL (their times, at
+the note's start and its release), PAN; and the part's, which follow the last note: LFO1 AMT, LFO1 SPD, LFO2 AMT,
+LFO2 SPD, FX1 BAL, FX2 BAL.
+
+**LO, HI**: the part of the source's travel used (beyond HI, all of it). **CURVE**: LIN straight, SOFT quick at the
+start, HARD slow at the start, S both, BIP a source that rests in its middle (a CC at 64). **SMOOTH**: the row glides
+(99: about half a second). **ZONE**: in MPE, the notes of the lower zone, the upper, or both. Rows on the same
+destination add up. The levels (VOL, O1 VOL, O2 VOL, N VOL) are factors: a positive amount lets the source bring the
+level up to full, and without it the level is that much less (VEL > VOL +40: soft notes 40 % quieter); a negative
+one takes the level down. A source that has never come (a controller without pressure, a keyboard without MPE)
+leaves its rows alone, so a sound made for pressure still plays from a plain keyboard.
+
+The factory sounds keep the MASK1's three routings as their first rows (velocity, the wheel, aftertouch), add MPE's
+pressure beside aftertouch, and TIMBRE on the masks.
 
 ## GENERAL
 
@@ -191,13 +210,30 @@ events; you can play over it.
 
 | Row | K1 | K2 | K3 | K4 |
 |---|---|---|---|---|
-| 1 | MIDI CH OMNI, 1..16 | A HZ 400.0..470.0 | VEL CRV 1..6, MAX | AT CRV 1..6 |
-| 2 | VOICES 4..12 | OCTAVE -3..+3 | | |
+| 1 | MIDI OMNI, 1..16, MPE | VEL CRV 1..6, MAX | AT CRV 1..6 | VOICES 4..12 |
+| 2 | OCTAVE -3..+3 | USB DEVICE / HOST | | |
+
+**MIDI**: OMNI (every channel), one channel, or MPE (below). **USB HOST**: the FM-1's USB port plays host to a
+USB-MIDI controller (an Osmose, say) through a powered hub or adapter (the FM-1 gives the port no power); meanwhile no
+computer is connected over USB. The page shows MPE's zones and the USB host's state.
 
 The curves: 1 the softest touch counts most, 3 straight, 6 only hard playing counts; MAX: every note at full
 velocity. VOICES: how many may sound (10, as the MASK1). The page also shows the render's load, whether the second
 core helps, and the voices allowed now: when the render runs long, a voice is let go and allowed back after ten quiet
 seconds.
+
+## TUNING (GLO again)
+
+| K1 | K2 | K3 | K4 |
+|---|---|---|---|
+| A HZ 300..500 | 1/100 .00...99 | SYSTEM | ROOT C..B, or STEPS 5..72 |
+
+KIST's tunings, for the whole part: **EQUAL** with any number of steps to the octave (5..72; 12 is equal
+temperament), **WERCKM. III**, **MEANTONE** (1/4 comma), **KIRNB. III** and **VALLOTTI**, each on any ROOT. A is always
+exact at the reference. Each key is a step of the tuning: SEMI, the octave buttons (an octave of the tuning), the
+glides, the bends and the pitch envelope all count in its steps; the arpeggiator's intervals (octaves, fifths, its
+chords) land on the steps nearest them. TUNE stays in cents. The filter's TRK and the comb follow the real pitch.
+The dial shows the steps round the octave (a temperament's notes with their offsets five times over).
 
 ## WRITE (SAVE)
 
@@ -210,16 +246,34 @@ The page shows what is in the slot now, and the name with its cursor. SAVE does 
 **REVERT** the sound as it was loaded, **SETUP** keep the part's settings and the sound as it is now for the next
 power-on (WRITE keeps them too). Writing stops the sound for a moment.
 
+## MPE
+
+With MIDI set to MPE on the GLOBAL page, MASQUE follows MPE (MMA/AMEI RP-053) as OPUS XIV does: every note on its
+own channel, its own bend (±48 semitones, or what the controller sets with RPN 0), its own pressure and its own
+timbre (CC74). Until a controller says otherwise (an MPE Configuration Message) the lower zone has its Master Channel
+on 1 and fifteen Member Channels; an upper zone (Master on 16) works too. The Master Channel's bend (±2) moves every
+note of its zone, its pressure is their aftertouch, its CC74 their timbre where their own channel sends none.
+Values sent before a note start it. Channels in no zone are ordinary channels. MPE+ (CC87) adds resolution.
+
+In the matrix, PRESS, TIMBRE and BEND are the note's own; AT is the zone's or a channel's (or a key's: the FM-1's
+own keys and poly aftertouch). Notes in MPE are not slurred (their own bend slides them). The looper records the
+channels and their expression, and plays them back as played.
+
+**The Osmose**: put it in MPE mode, its MIDI out into the FM-1's TRS jack (DIN to TRS: check which TRS wiring the
+FM-1 expects), or its USB into a powered hub on the FM-1's USB port with USB HOST on. DIN carries about a thousand
+messages a second: with many notes held and pressed it fills, and the expression grows coarser (SMOOTH helps).
+
 ## MIDI
 
 In (USB and the TRS jack, on the GLOBAL page's channel): notes, poly and channel aftertouch, pitch bend, CC 1 (mod
 wheel), CC 64 (sustain), CC 120 and 123 (all off), program change (0..39 the factory sounds, 40..127 U000..U087),
-clock, start and stop (the arpeggiator), and every value of the sound on the CC map below. Out (USB): the FM-1's
+clock, start and stop (the arpeggiator), every value of the sound on the CC map below, and MPE (above). Out (USB): the FM-1's
 keys and their pressure, and each value as you turn it, as its CC (so a computer can record your moves).
 
 ### The CC map
 
-A CC's 0..127 covers the value's whole range. MASK is 14-bit: CC 20 / 21 its top seven bits, CC 52 / 53 the two
+A CC's 0..127 covers the value's whole range. In MPE the map listens on the Master Channels (and channels in no
+zone), and CC74 is the timbre, not CUTF. MASK is 14-bit: CC 20 / 21 its top seven bits, CC 52 / 53 the two
 below (a controller sending only CC 20 moves it four masks at a time).
 
 | Section | CCs |
@@ -233,7 +287,7 @@ below (a controller sending only CC 20 moves it four masks at a time).
 | PITCH | 79 START, 80 SPD, 81 END |
 | LFO 1 | 82 AMT, 83 SPD, 84 DEST, 85 WAVE, 86 DLAY, 87 DCAY |
 | LFO 2 | 108 AMT, 109 SPD, 110 DEST, 111 WAVE, 112 DLAY, 113 DCAY |
-| MOD | 102 V-DEST, 103 V-AMT, 104 M-DEST, 105 M-AMT, 106 AT-DEST, 107 AT-AMT |
+| MATRIX | the rows' amounts: 102..107 rows 1..6, 117 row 7, 118 row 8 |
 | GENERAL | 3 MODE, 7 VOL, 12 SEMI, 5 PORT, 8 PANS, 9 RATE, 13 BEND |
 | FX | 94 1TYP, 93 1BAL, 95 2TYP, 91 2BAL |
 | ARP | 88 TYPE, 89 SPD, 90 HOLD, 92 TRIG |

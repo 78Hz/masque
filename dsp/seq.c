@@ -10,15 +10,16 @@
 
 typedef struct {
     uint32_t t;                            /* samples from the loop's start */
-    uint8_t type, a, b, rsv;               /* LE_* */
+    uint8_t type, a, b, rsv;               /* LE_*; a note: a key, b its velocity, rsv its channel */
 } lev_t;
-enum { LE_ON, LE_OFF, LE_CTL };
+enum { LE_ON, LE_OFF, LE_CTL, LE_EXPR };   /* LE_EXPR: a = kind | channel << 4, b | rsv << 7 the value (+8192) */
 static lev_t loopbuf[LOOP_MAX] PLAT_POOL;
 
 static struct {
     int state;                             /* LS_* */
     uint32_t n, len, pos, play_i;
     uint8_t rec_held[16], play_held[16];   /* bit sets of 128 keys */
+    uint8_t rec_ch[128], play_ch[128];     /* their channels */
 } L;
 
 static struct {
@@ -38,6 +39,7 @@ static struct {
 } A;
 
 static uint8_t phys[128];                  /* keys down as played (live or from the loop): their velocities */
+static uint8_t phys_ch[128];               /* and their channels */
 static int nphys;
 
 static inline void bset(uint8_t *b, int k, int on)
@@ -51,7 +53,7 @@ static inline int bget(const uint8_t *b, int k) { return (b[k >> 3] >> (k & 7)) 
 static void arp_stop_note(void)
 {
     if (A.sounding >= 0) {
-        eng_note_off(A.sounding);
+        eng_note_off(A.sounding, 64, CH_ARP);
         A.sounding = -1;
     }
     A.gate_off = 0;
@@ -76,7 +78,7 @@ static void arp_build(void)
     case AR_2OCT: oct++; /* fall through */
     case AR_1OCT:
         for (o = 0; o < oct; o++)
-            for (i = 0; i < n; i++) ADD(s[i] + 12 * o);
+            for (i = 0; i < n; i++) ADD(s[i] + tuning_interval(12 * o));
         break;
     case AR_DBL:
         for (i = 0; i < n; i++) { ADD(s[i]); ADD(s[i]); }
@@ -90,7 +92,7 @@ static void arp_build(void)
         int8_t up[48];
         int m = 0;
         for (o = 0; o < oct; o++)
-            for (i = 0; i < n && m < 48; i++) up[m++] = (int8_t)(s[i] + 12 * o);
+            for (i = 0; i < n && m < 48; i++) up[m++] = (int8_t)(s[i] + tuning_interval(12 * o));
         for (i = 0; i < m; i++) ADD(up[i]);
         for (i = m - 2; i > 0; i--) ADD(up[i]);
         break;
@@ -99,7 +101,7 @@ static void arp_build(void)
     case AR_RND2: oct++; /* fall through */
     case AR_RND:
         for (o = 0; o < oct; o++)
-            for (i = 0; i < n; i++) ADD(s[i] + 12 * o);
+            for (i = 0; i < n; i++) ADD(s[i] + tuning_interval(12 * o));
         break;
     case AR_MIN: case AR_MAJ: case AR_SUS2: case AR_SUS4: case AR_7TH:
     case AR_MIN2: case AR_MAJ2: case AR_SU22: case AR_SU42: case AR_7TH2: {
@@ -107,20 +109,22 @@ static void arp_build(void)
         for (i = 0; i < n; i++)
             for (o = 0; o <= two; o++)
                 for (j = 0; j < 4; j++)
-                    if (CH[c][j] >= 0) ADD(s[i] + CH[c][j] + 12 * o);
+                    if (CH[c][j] >= 0) ADD(s[i] + tuning_interval(CH[c][j] + 12 * o));
         break;
     }
     case AR_3O: case AR_2O: case AR_1O: {
         int m = A.type == AR_1O ? 1 : A.type == AR_2O ? 2 : 3;
         for (i = 0; i < n; i++)
-            for (o = 0; o <= m; o++) ADD(s[i] + 12 * o);
+            for (o = 0; o <= m; o++) ADD(s[i] + tuning_interval(12 * o));
         break;
     }
     case AR_5TH:
-        for (i = 0; i < n; i++) { ADD(s[i]); ADD(s[i] + 7); }
+        for (i = 0; i < n; i++) { ADD(s[i]); ADD(s[i] + tuning_interval(7)); }
         break;
     case AR_5TH2:
-        for (i = 0; i < n; i++) { ADD(s[i]); ADD(s[i] + 7); ADD(s[i] + 12); ADD(s[i] + 19); }
+        for (i = 0; i < n; i++) {
+            ADD(s[i]); ADD(s[i] + tuning_interval(7)); ADD(s[i] + tuning_interval(12)); ADD(s[i] + tuning_interval(19));
+        }
         break;
     default:
         break;
@@ -156,13 +160,13 @@ static void arp_step(void)
     legato = !A.trig && A.sounding >= 0;
     if (legato) {
         int old = A.sounding;
-        eng_note_on(key, eng_vel(arp_vel(key)), 1);
+        eng_note_on(key, eng_vel(arp_vel(key)), 1, CH_ARP);
         if (old != key)
-            eng_note_off(old);
+            eng_note_off(old, 64, CH_ARP);
         A.gate_off = 0;
     } else {
         arp_stop_note();
-        eng_note_on(key, eng_vel(arp_vel(key)), 0);
+        eng_note_on(key, eng_vel(arp_vel(key)), 0, CH_ARP);
         A.gate_off = A.trig;               /* without TRIG the note is held, and the next steps move it */
     }
     A.sounding = key;
@@ -209,18 +213,19 @@ static void arp_remove(int key)
 }
 
 /* ------------------------------------------------------------------------------------------ to the voices --- */
-static void play_on(int key, int vel)
+static void play_on(int key, int vel, int ch)
 {
     if (!phys[key])
         nphys++;
     phys[key] = (uint8_t)vel;
+    phys_ch[key] = (uint8_t)ch;
     if (A.type != AR_NONE)
         arp_add(key, vel);
     else
-        eng_note_on(key, eng_vel(vel), 0);
+        eng_note_on(key, eng_vel(vel), 0, ch);
 }
 
-static void play_off(int key)
+static void play_off(int key, int relvel, int ch)
 {
     if (!phys[key])
         return;
@@ -229,11 +234,11 @@ static void play_off(int key)
     if (A.type != AR_NONE)
         arp_remove(key);
     else
-        eng_note_off(key);
+        eng_note_off(key, relvel, ch);
 }
 
 /* ------------------------------------------------------------------------------------------------ looper --- */
-static void loop_put(int type, int a, int b)
+static void loop_put(int type, int a, int b, int ch)
 {
     if (L.state != LS_RECORDING || L.n >= LOOP_MAX)
         return;
@@ -241,6 +246,7 @@ static void loop_put(int type, int a, int b)
     loopbuf[L.n].type = (uint8_t)type;
     loopbuf[L.n].a = (uint8_t)a;
     loopbuf[L.n].b = (uint8_t)b;
+    loopbuf[L.n].rsv = (uint8_t)ch;
     L.n++;
 }
 
@@ -250,7 +256,7 @@ static void loop_release_playing(void)
     for (k = 0; k < 128; k++)
         if (bget(L.play_held, k)) {
             bset(L.play_held, k, 0);
-            play_off(k);
+            play_off(k, 64, L.play_ch[k]);
         }
 }
 
@@ -263,7 +269,8 @@ static void loop_end_recording(void)
             loopbuf[L.n].t = L.len - 1;
             loopbuf[L.n].type = LE_OFF;
             loopbuf[L.n].a = (uint8_t)k;
-            loopbuf[L.n].b = 0;
+            loopbuf[L.n].b = 64;
+            loopbuf[L.n].rsv = L.rec_ch[k];
             L.n++;
         }
     for (k = 0; k < 16; k++)
@@ -318,22 +325,28 @@ static void loop_play_event(const lev_t *e)
     switch (e->type) {
     case LE_ON:
         bset(L.play_held, e->a, 1);
-        play_on(e->a, e->b);
+        L.play_ch[e->a] = e->rsv;
+        play_on(e->a, e->b, e->rsv);
         break;
     case LE_OFF:
         if (bget(L.play_held, e->a)) {
             bset(L.play_held, e->a, 0);
-            play_off(e->a);
+            play_off(e->a, e->b, e->rsv);
         }
         break;
+    case LE_EXPR: {
+        int kind = e->a & 15, v = (e->b | e->rsv << 7) - (kind == EX_BEND ? 8192 : 0);
+        eng_expr(e->a >> 4, kind, v);
+        break;
+    }
     default:
-        eng_ctl(e->a, e->b | (e->a == SQ_BEND ? (int)e->rsv << 7 : 0));
+        eng_ctl(e->a, e->b);
         break;
     }
 }
 
 /* ------------------------------------------------------------------------------------------ from outside --- */
-void seq_note_on(int key, int vel)
+void seq_note_on(int key, int vel, int ch)
 {
     if (key < 0 || key > 127)
         return;
@@ -343,25 +356,40 @@ void seq_note_on(int key, int vel)
         L.n = 0;
     }
     if (L.state == LS_RECORDING) {
-        loop_put(LE_ON, key, vel);
+        loop_put(LE_ON, key, vel, ch);
         bset(L.rec_held, key, 1);
+        L.rec_ch[key] = (uint8_t)ch;
     }
     if (bget(L.play_held, key)) {          /* the loop holds it too: the loop's lets go first */
         bset(L.play_held, key, 0);
-        play_off(key);
+        play_off(key, 64, L.play_ch[key]);
     }
-    play_on(key, vel);
+    play_on(key, vel, ch);
 }
 
-void seq_note_off(int key)
+void seq_note_off(int key, int relvel, int ch)
 {
     if (key < 0 || key > 127)
         return;
     if (L.state == LS_RECORDING && bget(L.rec_held, key)) {
-        loop_put(LE_OFF, key, 0);
+        loop_put(LE_OFF, key, relvel, ch);
         bset(L.rec_held, key, 0);
     }
-    play_off(key);
+    play_off(key, relvel, ch);
+}
+
+void seq_expr(int ch, int kind, int v)
+{
+    if (L.state == LS_RECORDING && L.n < LOOP_MAX && kind != EX_RESET && kind != EX_RANGE) {
+        int u = v + (kind == EX_BEND ? 8192 : 0);
+        loopbuf[L.n].t = L.pos;
+        loopbuf[L.n].type = LE_EXPR;
+        loopbuf[L.n].a = (uint8_t)(kind | ch << 4);
+        loopbuf[L.n].b = (uint8_t)(u & 127);
+        loopbuf[L.n].rsv = (uint8_t)(u >> 7 & 127);
+        L.n++;
+    }
+    eng_expr(ch, kind, v);
 }
 
 void seq_ctl(int type, int a)
@@ -422,12 +450,12 @@ void seq_set(const mq_patch_t *p)
             A.n = 0;
             for (k = 0; k < 128; k++)
                 if (phys[k])
-                    eng_note_on(k, eng_vel(phys[k]), 0);
+                    eng_note_on(k, eng_vel(phys[k]), 0, phys_ch[k]);
         } else if (was == AR_NONE) {       /* on: the keys down become its list */
             A.n = 0;
             for (k = 0; k < 128; k++)
                 if (phys[k]) {
-                    eng_note_off(k);
+                    eng_note_off(k, 64, phys_ch[k]);
                     if (A.n < 16) {
                         A.list[A.n] = (int8_t)k;
                         A.lvel[A.n++] = phys[k];

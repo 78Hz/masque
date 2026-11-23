@@ -279,6 +279,148 @@ static void filter(void)
     printf("filter: comb at %d Hz; driven resonance peak %.2f\n", best, pk);
 }
 
+/* the frequency the part plays now: a sine, counted by its rising zero crossings over half a second */
+static double freq_now(void)
+{
+    static float L[22059], R[22059];
+    int i, n = 0, first = -1, last = 0;
+    run(0, 0, 4410);
+    run(L, R, 22059);
+    for (i = 1; i < 22059; i++)
+        if (L[i - 1] < 0.0f && L[i] >= 0.0f) {
+            double x = i - 1 + L[i - 1] / (L[i - 1] - L[i]);
+            if (first < 0) first = (int)(x * 1000);
+            last = (int)(x * 1000);
+            n++;
+        }
+    return n > 1 ? (n - 1) * FS / ((last - first) / 1000.0) : 0.0;
+}
+
+static void sine_patch(mq_patch_t *p)
+{
+    preset_init(p);
+    p->osc[0].env.s = 99; p->osc[0].env.r = 0;
+    p->gen.pans = 0;
+    p->fx.t1 = p->fx.t2 = 0;
+    memset(p->mtx, 0, sizeof p->mtx);
+}
+
+static mq_global_t glob(int a100, int sys, int edo, int root, int midi)
+{
+    mq_global_t g;
+    memset(&g, 0, sizeof g);
+    g.a_hz100 = (uint16_t)a100; g.system = (uint8_t)sys; g.edo = (uint8_t)edo; g.root = (uint8_t)root;
+    g.vel_curve = 2; g.at_curve = 2; g.voices = 10; g.midi = (uint8_t)midi;
+    return g;
+}
+
+#define NEAR(x, want, cents) (fabs(1200.0 * log2((x) / (want))) < (cents))
+static void tunings(void)
+{
+    mq_patch_t p;
+    mq_global_t g;
+    double f, c, e;
+    sine_patch(&p);
+    g = glob(44000, TS_EQUAL, 12, 0, 0);
+    masque_set_global(&g); masque_panic(); masque_set_patch(&p); run(0, 0, 256);
+    masque_note_on(69, 100); f = freq_now(); masque_note_off(69); run(0, 0, 4410);
+    CHECK(NEAR(f, 440.0, 2), "TUNING: A plays %.2f Hz, not 440", f);
+    g = glob(41500, TS_EQUAL, 12, 0, 0);
+    masque_set_global(&g); run(0, 0, 256);
+    masque_note_on(69, 100); f = freq_now(); masque_note_off(69); run(0, 0, 4410);
+    CHECK(NEAR(f, 415.0, 2), "TUNING: A at 415 plays %.2f Hz", f);
+    g = glob(44000, TS_EQUAL, 31, 0, 0);   /* 31 steps to the octave: A + 31 steps is the octave, + 1 a 31st */
+    masque_set_global(&g); run(0, 0, 256);
+    masque_note_on(100, 100); f = freq_now(); masque_note_off(100); run(0, 0, 4410);
+    CHECK(NEAR(f, 880.0, 2), "TUNING 31-EDO: A + 31 steps plays %.2f Hz, not 880", f);
+    masque_note_on(70, 100); f = freq_now(); masque_note_off(70); run(0, 0, 4410);
+    CHECK(NEAR(f, 440.0 * pow(2.0, 1.0 / 31.0), 2), "TUNING 31-EDO: one step plays %.2f Hz", f);
+    g = glob(44000, TS_MEANTONE, 12, 0, 0);   /* 1/4-comma meantone on C: the major third C-E pure (5/4) */
+    masque_set_global(&g); run(0, 0, 256);
+    masque_note_on(60, 100); c = freq_now(); masque_note_off(60); run(0, 0, 4410);
+    masque_note_on(64, 100); e = freq_now(); masque_note_off(64); run(0, 0, 4410);
+    CHECK(NEAR(e / c, 1.25, 2), "TUNING MEANTONE: C-E is %.4f, not 5/4", e / c);
+    printf("tunings: A 440 / 415, 31-EDO, meantone C-E %.4f\n", e / c);
+    g = glob(44000, TS_EQUAL, 12, 0, 0);
+    masque_set_global(&g); run(0, 0, 256);
+}
+
+static void mpe(void)
+{
+    mq_patch_t p;
+    mq_global_t g;
+    double f;
+    static float L[11025], R[11025];
+    double quiet, loud, plain;
+    sine_patch(&p);
+    g = glob(44000, TS_EQUAL, 12, 0, MQ_MIDI_MPE);
+    masque_set_global(&g); masque_panic(); masque_set_patch(&p); run(0, 0, 256);
+    CHECK(masque_meter()->mpe_lower == 15, "MPE: the power-on zone has %d members, not 15", masque_meter()->mpe_lower);
+    /* a Member Channel's bend moves its note, at +-48 */
+    masque_midi_isr(0xE1, (8192 + 341) & 127, (8192 + 341) >> 7);   /* +2 semitones on channel 2, before the note */
+    masque_midi_isr(0x91, 69, 100);
+    f = freq_now();
+    CHECK(NEAR(f, 440.0 * pow(2.0, 2.0 / 12.0), 5), "MPE: a Member's bend of +2 plays %.2f Hz", f);
+    /* the Master Channel's bend adds, at +-2 */
+    masque_midi_isr(0xE0, 0x7F, 0x7F);
+    f = freq_now();
+    CHECK(NEAR(f, 440.0 * pow(2.0, 4.0 / 12.0), 5), "MPE: Member +2 and Master +2 play %.2f Hz", f);
+    masque_midi_isr(0xE0, 0, 64); masque_midi_isr(0xE1, 0, 64); masque_midi_isr(0x81, 69, 0); run(0, 0, 4410);
+    /* PRESS -> VOL: before any pressure the row leaves the note alone; with pressure 0 it is silent */
+    p.mtx[0].src = XS_PRESS; p.mtx[0].dest = XD_VOL; p.mtx[0].amt = 99; p.mtx[0].hi = 100;
+    masque_set_patch(&p); run(0, 0, 256);
+    masque_midi_isr(0x92, 69, 100); run(0, 0, 2048);
+    run(L, R, 11025); plain = rms(L, 11025);
+    masque_midi_isr(0xD2, 0, 0); run(0, 0, 2048);
+    run(L, R, 11025); quiet = rms(L, 11025);
+    masque_midi_isr(0xD2, 127, 0); run(0, 0, 2048);
+    run(L, R, 11025); loud = rms(L, 11025);
+    CHECK(plain > 0.02, "MPE: a note with no pressure yet is silent (rms %.4f)", plain);
+    CHECK(quiet < 0.002, "MPE: pressure 0 on PRESS -> VOL 99 still sounds (rms %.4f)", quiet);
+    CHECK(loud > 0.02, "MPE: full pressure is silent (rms %.4f)", loud);
+    masque_midi_isr(0x82, 69, 0); run(0, 0, 4410);
+    /* an MCM: the Lower Zone to 7 Members; channel 10 is then in no zone, its bend +-2 (the sound's BEND) */
+    masque_midi_isr(0xB0, 101, 0); masque_midi_isr(0xB0, 100, 6); masque_midi_isr(0xB0, 6, 7);
+    run(0, 0, 256);
+    CHECK(masque_meter()->mpe_lower == 7, "MPE: after the MCM %d members, not 7", masque_meter()->mpe_lower);
+    masque_midi_isr(0xE9, 0x7F, 0x7F);
+    masque_midi_isr(0x99, 69, 100);
+    f = freq_now();
+    CHECK(NEAR(f, 440.0 * pow(2.0, 2.0 / 12.0), 5), "MPE: channel 10 out of the zone bends to %.2f Hz", f);
+    masque_midi_isr(0x89, 69, 0); masque_midi_isr(0xE9, 0, 64);
+    /* RPN 0 on a Member sets every Member's range: 12 semitones, then a full bend on channel 3 is an octave */
+    masque_midi_isr(0xB1, 101, 0); masque_midi_isr(0xB1, 100, 0); masque_midi_isr(0xB1, 6, 12);
+    masque_midi_isr(0xE2, 0x7F, 0x7F); masque_midi_isr(0x92, 57, 100);
+    f = freq_now();
+    CHECK(NEAR(f, 440.0, 5), "MPE: RPN 0 = 12 on channel 2, a full bend on channel 3 plays %.2f Hz", f);
+    masque_midi_isr(0x82, 57, 0); masque_midi_isr(0xE2, 0, 64); run(0, 0, 4410);
+    printf("mpe: zones, member and master bend, pressure exists, MCM, RPN 0\n");
+    g = glob(44000, TS_EQUAL, 12, 0, 0);
+    masque_set_global(&g); masque_panic(); run(0, 0, 256);
+}
+
+static void matrix(void)
+{
+    mq_patch_t p;
+    static float L[11025], R[11025];
+    double soft, hard;
+    sine_patch(&p);
+    p.mtx[0].src = XS_VEL; p.mtx[0].dest = XD_VOL; p.mtx[0].amt = 80; p.mtx[0].hi = 100;
+    masque_panic(); masque_set_patch(&p); run(0, 0, 256);
+    masque_note_on(69, 20); run(0, 0, 2048); run(L, R, 11025); soft = rms(L, 11025); masque_note_off(69); run(0, 0, 4410);
+    masque_note_on(69, 127); run(0, 0, 2048); run(L, R, 11025); hard = rms(L, 11025); masque_note_off(69); run(0, 0, 4410);
+    CHECK(hard > 2.5 * soft, "MATRIX: VEL -> VOL 80: hard %.4f, soft %.4f", hard, soft);
+    /* the FM-1's own keys' pressure is AT: AT -> MASK moves the mask */
+    p.mtx[0].src = XS_AT; p.mtx[0].dest = XD_MASK; p.mtx[0].amt = 99;
+    masque_set_patch(&p); run(0, 0, 256);
+    masque_note_on(69, 100); run(0, 0, 2048);
+    CHECK(masque_meter()->mask_now[0] < 31.5f, "MATRIX: no pressure yet, yet the mask moved (%.2f)", masque_meter()->mask_now[0]);
+    masque_pressure(69, 127); run(0, 0, 4096);
+    CHECK(masque_meter()->mask_now[0] > 150.0f, "MATRIX: AT -> MASK 99 at full pressure: mask %.2f", masque_meter()->mask_now[0]);
+    masque_note_off(69); run(0, 0, 4410);
+    printf("matrix: velocity on the level, the keys' pressure on the mask\n");
+}
+
 static void cost(void)
 {
     mq_patch_t p;
@@ -314,6 +456,9 @@ int main(int argc, char **argv)
             play_preset(p, 1);
         modes();
         filter();
+        tunings();
+        mpe();
+        matrix();
         cost();
     }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);

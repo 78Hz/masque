@@ -149,8 +149,8 @@ S.append(PageBreak())
 # ---------------------------------------------------------------------------------------------- contents
 S.append(P("Contents", ParagraphStyle("ct", parent=h1)))
 toc = TableOfContents()
-toc.levelStyles = [ParagraphStyle("t0", fontName="BarlowM", fontSize=11, leading=14, leftIndent=0, spaceBefore=2),
-                   ParagraphStyle("t1", fontName="Body", fontSize=8.3, leading=10.6, leftIndent=12, textColor=GREY)]
+toc.levelStyles = [ParagraphStyle("t0", fontName="BarlowM", fontSize=10.5, leading=13, leftIndent=0, spaceBefore=1),
+                   ParagraphStyle("t1", fontName="Body", fontSize=7.8, leading=9.4, leftIndent=12, textColor=GREY)]
 S.append(toc)
 S.append(PageBreak())
 
@@ -174,6 +174,9 @@ S.append(table([["", ""],
                 ["Envelopes", "4 loopable ADSRs per voice (OSC 1, OSC 2, NOISE, FILTER); delta envelopes for each "
                               "oscillator's mask and for pitch"],
                 ["LFOs", "2, eight waves, 16 destinations, delay and decay"],
+                ["Modulation", "an 8-row matrix in each sound: 13 sources and any CC, 26 destinations"],
+                ["MPE", "RP-053: zones, Member and Master Channels, bend sensitivity, MPE+; DIN or USB host"],
+                ["Tuning", "A 300–500.99 Hz; 5–72 equal steps to the octave, or four historical temperaments"],
                 ["Play modes", "POLY, MONO, SLUR, MONO PORTA, PARA, MOLY, PARA SLUR, MONO RETRIG, POLY RETRIG"],
                 ["Arpeggiator", "26 patterns, 20–400 BPM or MIDI clock, HOLD, TRIG"],
                 ["Looper", "one track, up to 4096 events"],
@@ -272,20 +275,21 @@ S.append(table([["Control", "What it does"],
                 ["SEL", "OSC 1 → OSC 2 → NOISE → FILTER (the four sections with an envelope)."],
                 ["ENV", "Lit: the envelope of the section shown instead of its settings, like the MASK1's Env button."],
                 ["LFO", "LFO 1 ↔ LFO 2."],
-                ["EDIT", "PITCH → MOD → GENERAL."],
+                ["EDIT", "PITCH → MATRIX → GENERAL."],
                 ["FX", "The effects."],
                 ["ARP", "The arpeggiator. Pressed again on its page: HOLD on / off. Lit while it plays."],
                 ["SEQ", "The looper's page."],
                 ["REC", "Looper: wait for the first note (blinks), record (lit); again: play the loop."],
                 ["PLAY", "Looper: play (green) or stop."],
-                ["GLO", "The part's settings (GLOBAL)."],
+                ["GLO", "The part's settings (GLOBAL: MIDI, MPE, USB host); again: TUNING."],
                 ["SAVE", "Lit while the sound is edited. Press: the WRITE page; press again there: its action."],
                 ["SELECT", "The next row, and the next page."],
-                ["ALGORITHM", "The one number: MASK of the oscillator shown (OSC 1 on the other pages). A quick turn "
+                ["ALGORITHM", "The one number: MASK of the oscillator shown (OSC 1 on the other pages; on MATRIX, "
+                              "the matrix's row). A quick turn "
                               "goes four at a time."],
                 ["PRESETS", "The next sound: P00–P39, then U000–U127. It loads when the knob rests."],
                 ["K1–K4", "The lit row's four values."],
-                ["OCT− / OCT+", "The FM-1's keys an octave down / up (−3 to +3); both together: 0."],
+                ["OCT− / OCT+", "The FM-1's keys an octave of the tuning down / up (−3 to +3); both together: 0."],
                 ["MASTER", "Volume."]], [28 * mm, W - 28 * mm]))
 S.append(P("The screen", h2))
 S.append(P("The <b>top line</b> shows the sound's number and name, a <b>*</b> while it has unsaved edits, and a "
@@ -294,7 +298,7 @@ S.append(P("The <b>top line</b> shows the sound's number and name, a <b>*</b> wh
            "page is about: the masks (moving live with their envelopes and LFOs), an envelope, the filter's "
            "response, an LFO's wave, the effects. The <b>bottom</b> holds the rows of values."))
 S.append(img(os.path.join(ROOT, "docs", "img", "screens.png"), W,
-             "HOME while playing, OSC 1, OSC 2's envelope, FILTER, LFO 1, FX, ARP and WRITE."))
+             "HOME while playing, OSC 1, OSC 2's envelope, FILTER, the MATRIX, TUNING (31-EDO), FX and WRITE."))
 S.append(P("The keys", h2))
 S.append(P("The FM-1's 27 keys play with velocity, and each key's <b>pressure</b> is that voice's aftertouch. "
            "They also go out over USB MIDI. Velocity runs through the curve chosen on the GLOBAL page."))
@@ -357,14 +361,52 @@ S.append(P("Free-running, one for the whole part. <b>DEST</b>: FREQ, VOL, FILT, 
            "UP, DOWN, SAWS (two small saws), STEP (four stairs), HSIN (half sines), RAND (sample and hold). "
            "<b>DLAY</b>: after the first key the LFO waits, then fades in (not while the mod wheel or aftertouch "
            "controls its amount or speed). <b>DCAY</b>: it fades out after this long (0 never)."))
-S.append(P("MOD", h2))
-S.append(knobs([["1", "V-DEST", "V-AMT −99…+99", "M-DEST", "M-AMT −99…+99"],
-                ["2", "AT-DEST", "AT-AMT −99…+99", "", ""]]))
+S.append(P("MATRIX", h2))
+S.append(P("Eight rows, each sending a source to a destination, kept with the sound. Each matrix row takes two rows "
+           "of knobs; SELECT walks them, and on this page ALGORITHM jumps from row to row. The page lists all eight "
+           "rows and shows the last note's expression live (VEL, PRESS, AT, TIMBRE, BEND; a source not sent yet stays "
+           "dark)."))
+S.append(table([["Row", "K1", "K2", "K3", "K4"],
+                ["A", "SRC", "DEST", "AMT −99…+99", "CURVE"],
+                ["B", "LO 0–99", "HI 1–100", "SMOOTH 0–99", "ZONE ALL / LO / HI"]],
+               [12 * mm] + [(W - 12 * mm) / 4] * 4))
 S.append(Spacer(1, 5))
-S.append(P("<b>Velocity</b> (V): FLT, F EG (the filter envelope's amount), VOL, MASK, P EG (the pitch "
-           "envelope's START), ATK (the attacks). <b>Mod wheel</b> (M, MIDI CC 1) and <b>aftertouch</b> (AT: the "
-           "FM-1's key pressure or MIDI aftertouch): FLT, LFO1 AMT, LFO1 SPD, LFO2 AMT, LFO2 SPD, VOL, MASK, FREQ, "
-           "O1 VOL, O1 MASK, O2 VOL, O2 MASK, N FREQ, N VOL, FX1 BAL, FX2 BAL."))
+S.append(table([["Sources", "What"],
+                ["VEL, REL VEL", "the note's velocity, and the velocity it is let go with"],
+                ["PRESS", "MPE pressure: the note's own Member Channel's pressure"],
+                ["AT", "aftertouch: the FM-1's key pressure, poly aftertouch, or a channel's (in MPE the zone's)"],
+                ["TIMBRE", "MPE's CC74: the note's own (or its zone's Master Channel's)"],
+                ["BEND", "the note's bend, −1…+1"],
+                ["WHEEL, CC 0–127", "the mod wheel (CC 1), any controller"],
+                ["KEY", "the key, around middle C, −1…+1"],
+                ["LFO1, LFO2, F ENV", "the LFOs, the filter envelope"],
+                ["RAND", "a random value each note gets as it starts, −1…+1"]],
+               [34 * mm, W - 34 * mm]))
+S.append(Spacer(1, 5))
+S.append(table([["Destinations", "What"],
+                ["PITCH, O1 PITCH, O2 PITCH", "up to 24 steps of the tuning"],
+                ["MASK, O1 MASK, O2 MASK", "up to 128 masks, through the sub-masks"],
+                ["MASK SPD", "the mask envelopes' speed"],
+                ["VOL, O1 VOL, O2 VOL, N VOL", "levels, as factors (below)"],
+                ["N FREQ, CUTF, RESO, DRIVE", "the noise's rate, the cutoff (up to 72 semitones), resonance, drive"],
+                ["F ENV, P ENV", "the filter and pitch envelopes' depth"],
+                ["ATK, REL", "the envelopes' attack (at the note's start) and release (as it is let go) times"],
+                ["PAN", "the voice's place"],
+                ["LFO1 AMT … FX2 BAL", "the part's: the LFOs' amounts and speeds, the effects' balances, from the "
+                                       "last note played"]],
+               [46 * mm, W - 46 * mm]))
+S.append(Spacer(1, 5))
+S.append(P("<b>LO</b> and <b>HI</b> pick the part of the source's travel that is used. <b>CURVE</b>: LIN straight, "
+           "SOFT quick at the start, HARD slow at the start, S both, BIP for a source that rests in its middle (a CC "
+           "at 64). <b>SMOOTH</b> lets the row glide (99: about half a second); it evens out coarse MIDI. "
+           "<b>ZONE</b>: in MPE, the notes of the lower zone, the upper, or both. Rows on the same destination add "
+           "up. The levels are factors: a positive amount lets the source bring the level up to full, and without "
+           "it the level is that much less (VEL > VOL +40: soft notes 40 % quieter); a negative amount takes it down "
+           "(PRESS > VOL +99: a note is silent until pressed)."))
+S.append(P("A source that has never come (a controller without pressure, a keyboard without MPE) leaves its rows "
+           "alone, so a sound made for pressure still plays from a plain keyboard. The factory sounds keep the "
+           "MASK1's three routings as their first rows (velocity, the wheel, aftertouch), add MPE pressure beside "
+           "aftertouch, and TIMBRE on the masks.", note))
 S.append(P("GENERAL", h2))
 S.append(knobs([["1", "MODE", "VOL 0–99", "SEMI −24…+24", "PORT 0–13"],
                 ["2", "PANS 0–99", "RATE 0–99", "BEND 0–12", ""]]))
@@ -405,13 +447,33 @@ S.append(P("Steps are sixteenth notes at SPD; when MIDI clock arrives the arpegg
            "the notes after you let go, until you play a new chord. <b>TRIG</b> off: one held note that changes "
            "pitch each step instead of a new note per step."))
 S.append(P("GLOBAL", h2))
-S.append(knobs([["1", "MIDI CH OMNI, 1–16", "A HZ 400.0–470.0", "VEL CRV 1–6, MAX", "AT CRV 1–6"],
-                ["2", "VOICES 4–12", "OCTAVE −3…+3", "", ""]]))
+S.append(knobs([["1", "MIDI OMNI, 1–16, MPE", "VEL CRV 1–6, MAX", "AT CRV 1–6", "VOICES 4–12"],
+                ["2", "OCTAVE −3…+3", "USB DEVICE / HOST", "", ""]]))
 S.append(Spacer(1, 5))
 S.append(P("Curve 1 makes soft playing count most, 3 is straight, 6 needs hard playing; MAX plays every note at "
            "full velocity. VOICES sets the polyphony (10, as on the MASK1). The page also shows the audio load, "
            "whether the second processor core is helping, and how many voices are allowed right now: if the "
            "audio runs long, MASQUE lets one voice go and allows it back after ten quiet seconds."))
+S.append(P("<b>MIDI</b>: OMNI (every channel), one channel, or MPE (chapter 8). <b>USB</b> HOST: the FM-1's USB port "
+           "plays host to a USB-MIDI controller through a powered hub or adapter (the FM-1 gives the port no power); "
+           "meanwhile no computer is connected over USB. The page shows MPE's zones and the USB host's state."))
+S.append(P("TUNING", h2))
+S.append(P("Press GLO again for the tuning, which is the whole part's (KIST's tunings)."))
+S.append(knobs([["1", "A HZ 300–500", "1/100 .00–.99", "SYSTEM", "ROOT C–B, or STEPS 5–72"]]))
+S.append(Spacer(1, 5))
+S.append(table([["SYSTEM", "What"],
+                ["EQUAL", "any number of equal steps to the octave, 5 to 72 (12: equal temperament; 19, 31, 53 …)"],
+                ["WERCKM. III", "Werckmeister III: four fifths a quarter of the Pythagorean comma narrow"],
+                ["MEANTONE", "quarter-comma meantone: pure major thirds, a wolf fifth"],
+                ["KIRNB. III", "Kirnberger III"],
+                ["VALLOTTI", "six fifths a sixth of the Pythagorean comma narrow"]],
+               [28 * mm, W - 28 * mm]))
+S.append(Spacer(1, 4))
+S.append(P("A stays exact at the reference. Every key is a step of the tuning: in 31-EDO the FM-1's keys play "
+           "31sts of an octave, and OCT− / OCT+ move a whole octave of 31. SEMI, the glides, the bends and the pitch "
+           "envelope count in steps; the arpeggiator's octaves, fifths and chords land on the steps nearest them. "
+           "TUNE stays in cents, and the filter's TRK and the comb follow the real pitch. The dial shows the steps "
+           "round the octave; a temperament's notes are drawn with their offsets five times over."))
 
 # ------------------------------------------------------------------------------------------------ modes
 S.append(PageBreak())
@@ -483,11 +545,35 @@ S.append(P("Good places to start: P00 MASQUE (bouncing mask envelopes), P01 GLAS
 
 # ------------------------------------------------------------------------------------------------ midi
 S.append(PageBreak())
-S.append(P("8  MIDI", h1))
+S.append(P("8  MPE and MIDI", h1))
+S.append(P("MPE", h2))
+S.append(P("With MIDI set to MPE on the GLOBAL page, MASQUE follows MPE (MMA/AMEI RP-053) rule by rule, as OPUS XIV "
+           "does: every note on its own channel, with its own bend, pressure and timbre."))
+S.append(table([["Channel", "Message", "Means"],
+                ["Member", "pitch bend", "the note's own bend (±48 semitones, or what RPN 0 sets for every Member)"],
+                ["Member", "channel pressure", "the note's PRESS"],
+                ["Member", "CC74", "the note's TIMBRE"],
+                ["Master", "pitch bend", "added to every note of the zone (±2)"],
+                ["Master", "channel pressure", "AT for every note of the zone"],
+                ["Master", "CC74", "TIMBRE for the zone's notes whose own channel sends none"],
+                ["no zone", "bend, pressure, CC74", "an ordinary channel: its notes' bend (the sound's BEND), AT, TIMBRE"],
+                ["any", "poly pressure", "AT for that key's note"]],
+               [22 * mm, 34 * mm, W - 56 * mm]))
+S.append(Spacer(1, 4))
+S.append(P("Until a controller sends an MPE Configuration Message, the lower zone has its Master Channel on 1 and "
+           "fifteen Members (2–16); an upper zone (Master on 16) works too, and the newest zone wins where they "
+           "would overlap. A configuration message stops the notes of the channels it moves. Values sent before a "
+           "note start it. MPE+ (CC87) adds resolution to pressure and timbre. MPE notes are not slurred: their own "
+           "bend slides them. The looper records the channels and their expression and plays them back as played."))
+S.append(P("<b>The Osmose</b>: put it in MPE mode, then either its MIDI out into the FM-1's TRS jack (a DIN-to-TRS "
+           "adapter: check which TRS wiring the FM-1 expects), or its USB into a powered hub on the FM-1's USB port "
+           "with GLOBAL &gt; USB on HOST. DIN carries about a thousand messages a second; with many notes held and "
+           "pressed it fills and the expression grows coarser, which the matrix's SMOOTH evens out.", note))
+S.append(P("MIDI", h2))
 S.append(table([["", ""],
                 ["In", "USB and the 3.5 mm TRS jack, on the GLOBAL channel (or OMNI)."],
                 ["Notes", "note on / off with velocity"],
-                ["Aftertouch", "poly (per key) and channel"],
+                ["Aftertouch", "poly (per key) and channel; in MPE, as above"],
                 ["Controllers", "pitch bend; CC 1 mod wheel; CC 64 sustain; CC 120 and 123 all off"],
                 ["Program change", "0–39 the factory sounds, 40–127 U000–U087"],
                 ["Clock", "clock, start, stop: the arpeggiator follows"],
@@ -497,6 +583,8 @@ S.append(table([["", ""],
                [32 * mm, W - 32 * mm], head=False))
 S.append(P("The FM-1 has no pitch or mod wheel: those come only from an external controller over MIDI.", small))
 S.append(P("The CC map", h2))
+S.append(P("In MPE the map listens on the Master Channels (and channels in no zone), and CC74 is the notes' "
+           "timbre there, not CUTF.", small))
 S.append(P("A CC's 0–127 covers the value's whole range (a choice such as MODE or DEST in equal bands). MASK is "
            "14-bit: CC 20 / 21 carry its top seven bits and CC 52 / 53 the two below, so a controller that sends "
            "only CC 20 moves it four masks at a time and one that sends both reaches every mask."))
@@ -511,7 +599,7 @@ S.append(table([["Section", "CC: value"],
                 ["PITCH", "79 START, 80 SPD, 81 END"],
                 ["LFO 1", "82 AMT, 83 SPD, 84 DEST, 85 WAVE, 86 DLAY, 87 DCAY"],
                 ["LFO 2", "108 AMT, 109 SPD, 110 DEST, 111 WAVE, 112 DLAY, 113 DCAY"],
-                ["MOD", "102 V-DEST, 103 V-AMT, 104 M-DEST, 105 M-AMT, 106 AT-DEST, 107 AT-AMT"],
+                ["MATRIX", "the rows' amounts: 102–107 rows 1–6, 117 row 7, 118 row 8"],
                 ["GENERAL", "3 MODE, 7 VOL, 12 SEMI, 5 PORT, 8 PANS, 9 RATE, 13 BEND"],
                 ["FX", "94 1TYP, 93 1BAL, 95 2TYP, 91 2BAL"],
                 ["ARP", "88 TYPE, 89 SPD, 90 HOLD, 92 TRIG"],
@@ -544,6 +632,7 @@ for t in ["One part: the MASK1's multitimbral parts, layers and splits are not i
           "masks other than those Kodamo names will not match the MASK1's.",
           "The 40 factory sounds are MASQUE's own.",
           "The filter goes further than the MASK1's: DRIVE, a PEAK mode and a tuned comb; MASQUE has its own CC map.",
+          "A modulation matrix in place of the MASK1's three routings, MPE, and alternate tunings.",
           "The effect families and numbering follow the MASK1; the effects themselves are MASQUE's own designs, "
           "the reverb a plate.",
           "The looper keeps 4096 events (the MASK1 10,000)."]:

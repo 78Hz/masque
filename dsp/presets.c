@@ -40,6 +40,17 @@ static void LFO(mq_patch_t *p, int i, int amt, int spd, int dest, int wave, int 
     p->lfo[i].dlay = (uint8_t)dlay;
     p->lfo[i].dcay = (uint8_t)dcay;
 }
+static void X(mq_patch_t *p, int r, int src, int dest, int amt)   /* a matrix row, its whole range, straight */
+{
+    p->mtx[r].src = (uint8_t)src;
+    p->mtx[r].dest = (uint8_t)dest;
+    p->mtx[r].amt = (int8_t)amt;
+    p->mtx[r].curve = XC_LIN;
+    p->mtx[r].lo = 0;
+    p->mtx[r].hi = 100;
+    p->mtx[r].smooth = 3;
+    p->mtx[r].zone = XZ_ALL;
+}
 static void FXS(mq_patch_t *p, int t1, int b1, int t2, int b2)
 {
     p->fx.t1 = (uint8_t)t1;
@@ -63,6 +74,10 @@ void preset_init(mq_patch_t *p)
     for (i = 0; i < (int)sizeof *p; i++)
         b[i] = 0;
     NAME(p, "INIT");
+    for (i = 0; i < MQ_MTX_ROWS; i++) {    /* the matrix's rows: empty, their whole range */
+        p->mtx[i].hi = 100;
+        p->mtx[i].smooth = 3;
+    }
     O(p, 0, 31, 0, 0);
     O(p, 1, 31, 0, 0);
     E(&p->osc[0].env, 80, 0, 40, 70, 25, 0);
@@ -73,12 +88,13 @@ void preset_init(mq_patch_t *p)
     E(&p->filt.env, 0, 0, 40, 0, 30, 0);
     LFO(p, 0, 0, 50, LD_FREQ, LW_SIN, 0, 0);
     LFO(p, 1, 0, 30, LD_FILT, LW_SIN, 0, 0);
-    p->vel.dest = VD_VOL;
-    p->vel.amt = 40;
-    p->wheel.dest = MD_L1AMT;
-    p->wheel.amt = 60;
-    p->at.dest = MD_FLT;
-    p->at.amt = 30;
+    /* the matrix: velocity on the level, the wheel on LFO 1, the keys' pressure (and MPE's) on the cutoff, MPE's
+     * timbre on the masks */
+    X(p, 0, XS_VEL, XD_VOL, 40);
+    X(p, 1, XS_WHEEL, XD_L1AMT, 60);
+    X(p, 2, XS_AT, XD_CUTF, 30);
+    X(p, 3, XS_PRESS, XD_CUTF, 30);
+    X(p, 4, XS_TIMBRE, XD_MASK, 20);
     p->gen.mode = PM_POLY;
     p->gen.vol = 80;
     p->gen.pans = 20;
@@ -110,7 +126,7 @@ void preset_get(int n, mq_patch_t *p)
         O(p, 0, 29, 0, 0); O(p, 1, 30, 12, 4);
         E(&p->osc[0].env, 82, 0, 74, 0, 70, 0);
         E(&p->osc[1].env, 55, 0, 62, 0, 60, 0);
-        p->vel.dest = VD_MASK; p->vel.amt = 18;
+        X(p, 0, XS_VEL, XD_MASK, 18);
         FXS(p, F1_CH + 1, 25, F2_RV + 11, 42);
         break;
     case 2:   /* the manual's own example: 29, short */
@@ -118,7 +134,7 @@ void preset_get(int n, mq_patch_t *p)
         O(p, 0, 29, 0, 0); O(p, 1, 15, -12, 0);
         E(&p->osc[0].env, 86, 0, 48, 0, 44, 0);
         E(&p->osc[1].env, 40, 0, 34, 0, 30, 0);
-        p->vel.dest = VD_VOL; p->vel.amt = 70;
+        X(p, 0, XS_VEL, XD_VOL, 70);
         FXS(p, F1_OFF, 0, F2_RV + 4, 25);
         break;
     case 3:   /* 24: the square of small saws, filtered, one voice */
@@ -128,7 +144,7 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[1].env, 60, 0, 40, 85, 12, 0);
         F(p, 46, 38, FM_LP, 20, FX_12DB); E(&p->filt.env, 44, 0, 40, 12, 20, 0);
         p->gen.mode = PM_MONO_PORTA; p->gen.port = 4;
-        p->vel.dest = VD_FEG; p->vel.amt = 50;
+        X(p, 0, XS_VEL, XD_FENV, 50);
         break;
     case 4:
         NAME(p, "VAPOUR");
@@ -173,7 +189,7 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[0].env, 74, 0, 50, 80, 30, 0);
         E(&p->osc[1].env, 74, 0, 50, 80, 30, 0);
         F(p, 60, 15, FM_LP, 40, FX_12DB); E(&p->filt.env, 30, 0, 50, 30, 30, 0);
-        p->vel.dest = VD_FLT; p->vel.amt = 70;
+        X(p, 0, XS_VEL, XD_CUTF, 70);
         p->gen.pans = 60;
         FXS(p, F1_CH + 5, 40, F2_RV + 6, 25);
         break;
@@ -182,8 +198,8 @@ void preset_get(int n, mq_patch_t *p)
         O(p, 0, 31, 0, 0); O(p, 1, 63, 0, 0);
         E(&p->osc[0].env, 80, 0, 0, 99, 8, 0);
         E(&p->osc[1].env, 58, 0, 0, 99, 8, 0);
-        p->vel.amt = 0;
-        p->wheel.dest = MD_FX1BAL; p->wheel.amt = 80;
+        p->mtx[0].amt = 0;                 /* (an organ: velocity off) */
+        X(p, 1, XS_WHEEL, XD_FX1BAL, 80);
         FXS(p, F1_CH + 15, 40, F2_RV + 3, 18);
         break;
     case 10:
@@ -191,7 +207,7 @@ void preset_get(int n, mq_patch_t *p)
         O(p, 0, 31, 0, 0); O(p, 1, 29, 12, 0);
         E(&p->osc[0].env, 80, 0, 72, 22, 42, 0);
         E(&p->osc[1].env, 46, 0, 40, 0, 36, 0);
-        p->vel.dest = VD_VOL; p->vel.amt = 65;
+        X(p, 0, XS_VEL, XD_VOL, 65);
         p->gen.rate = 40;
         FXS(p, F1_RM + 1, 30, F2_RV + 5, 22);
         break;
@@ -211,7 +227,7 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[1].env, 60, 20, 50, 80, 40, 0);
         F(p, 84, 40, FM_BP, 60, FX_12DB);
         LFO(p, 0, 16, 20, LD_MASK, LW_SIN, 0, 0);
-        p->at.dest = MD_MASK; p->at.amt = 40;
+        X(p, 2, XS_AT, XD_MASK, 40); X(p, 3, XS_PRESS, XD_MASK, 40);
         FXS(p, F1_CH + 2, 30, F2_RV + 8, 30);
         break;
     case 13:
@@ -230,7 +246,7 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[0].env, 78, 12, 50, 80, 26, 0);
         E(&p->osc[1].env, 66, 14, 50, 80, 26, 0);
         F(p, 54, 12, FM_LP, 50, FX_12DB); E(&p->filt.env, 40, 24, 46, 40, 30, 0);
-        p->vel.dest = VD_FEG; p->vel.amt = 60;
+        X(p, 0, XS_VEL, XD_FENV, 60);
         FXS(p, F1_CH + 1, 20, F2_RV + 6, 25);
         break;
     case 15:  /* 7: the quarter sine, four to a cycle: a saw two octaves up */
@@ -250,7 +266,7 @@ void preset_get(int n, mq_patch_t *p)
         p->noise.freq = 99; E(&p->noise.env, 99, 0, 40, 0, 34, 0);
         F(p, 60, 97, FM_COMBP, 99, FX_LP1 + 5);
         E(&p->filt.env, 0, 0, 40, 0, 40, 0);
-        p->vel.dest = VD_VOL; p->vel.amt = 60;
+        X(p, 0, XS_VEL, XD_VOL, 60);
         p->gen.pans = 40;
         FXS(p, F1_OFF, 0, F2_RV + 7, 26);
         break;
@@ -262,7 +278,7 @@ void preset_get(int n, mq_patch_t *p)
         p->noise.freq = 99; E(&p->noise.env, 36, 0, 20, 0, 18, 0);
         F(p, 127, 0, FM_LP, 0, FX_12DB);
         p->pitch.start = 36; p->pitch.spd = 26;
-        p->vel.dest = VD_VOL; p->vel.amt = 80;
+        X(p, 0, XS_VEL, XD_VOL, 80);
         p->gen.pans = 0;
         break;
     case 18:  /* noise through the band pass, repeated by the delay */
@@ -282,7 +298,7 @@ void preset_get(int n, mq_patch_t *p)
         F(p, 70, 82, FM_BP, 20, FX_12DB);
         LFO(p, 0, 60, 12, LD_FILT, LW_RAND, 0, 0);
         LFO(p, 1, 30, 8, LD_PAN, LW_SIN, 0, 0);
-        p->at.dest = MD_FLT; p->at.amt = 60;
+        X(p, 2, XS_AT, XD_CUTF, 60); X(p, 3, XS_PRESS, XD_CUTF, 60);
         FXS(p, F1_OFF, 0, F2_RV + 14, 45);
         break;
     case 20:
@@ -300,7 +316,7 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[1].env, 0, 0, 50, 80, 14, 0);
         F(p, 40, 82, FM_LP, 30, FX_24DB); E(&p->filt.env, 50, 0, 36, 0, 20, 0);
         p->filt.drive = 55;
-        p->vel.dest = VD_FEG; p->vel.amt = 70;
+        X(p, 0, XS_VEL, XD_FENV, 70);
         p->gen.mode = PM_SLUR; p->gen.port = 3; p->gen.pans = 0;
         FXS(p, F1_DT + 3, 35, F2_DL + 4, 20);
         break;
@@ -382,7 +398,7 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[0].env, 80, 0, 44, 0, 18, 0);
         E(&p->osc[1].env, 50, 0, 30, 0, 18, 0);
         F(p, 44, 30, FM_HP, 50, FX_12DB);
-        p->vel.dest = VD_FLT; p->vel.amt = 60;
+        X(p, 0, XS_VEL, XD_CUTF, 60);
         FXS(p, F1_CH + 9, 30, F2_OFF, 0);
         break;
     case 31:
@@ -454,7 +470,7 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[0].env, 82, 0, 50, 70, 16, 0);
         E(&p->osc[1].env, 50, 0, 50, 70, 16, 0);
         F(p, 58, 20, FM_LP, 30, FX_12DB);
-        p->wheel.dest = MD_FX1BAL; p->wheel.amt = 60;
+        X(p, 1, XS_WHEEL, XD_FX1BAL, 60);
         p->gen.mode = PM_MONO_RETRIG; p->gen.pans = 0;
         FXS(p, F1_DT + 13, 55, F2_OFF, 0);
         break;

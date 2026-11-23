@@ -25,11 +25,21 @@ enum { LW_SIN, LW_SQR, LW_UP, LW_DOWN, LW_SAWS, LW_STEP, LW_HSIN, LW_RAND, NLWAV
 /* the LFOs' destinations (16) */
 enum { LD_FREQ, LD_VOL, LD_FILT, LD_MASK, LD_PAN, LD_O1FREQ, LD_O1VOL, LD_O1MASK, LD_O2FREQ, LD_O2VOL, LD_O2MASK,
        LD_NFREQ, LD_NVOL, LD_FX1TYP, LD_FX2TYP, LD_FX2BAL, NLDESTS };
-/* the mod wheel's and aftertouch's destinations (16) */
-enum { MD_FLT, MD_L1AMT, MD_L1SPD, MD_L2AMT, MD_L2SPD, MD_VOL, MD_MASK, MD_FREQ, MD_O1VOL, MD_O1MASK, MD_O2VOL,
-       MD_O2MASK, MD_NFREQ, MD_NVOL, MD_FX1BAL, MD_FX2BAL, NMDESTS };
-/* velocity's destinations (6) */
-enum { VD_FLT, VD_FEG, VD_VOL, VD_MASK, VD_PEG, VD_ATK, NVDESTS };
+/* the modulation matrix's sources: the note's own (velocity, release velocity, pressure, timbre (MPE's CC74), its
+ * bend, its key, a random value per note, the filter envelope), the part's (channel aftertouch, the mod wheel, the
+ * LFOs) and any CC (XS_CC0 + n) */
+enum { XS_NONE, XS_VEL, XS_REL, XS_PRESS, XS_AT, XS_TIMBRE, XS_BEND, XS_WHEEL, XS_KEY, XS_LFO1, XS_LFO2, XS_FENV,
+       XS_RAND, XS_CC0, NXSRC = XS_CC0 + 128 };
+/* its destinations: the voice's, then the part's (from XD_L1AMT: they follow the last note) */
+enum { XD_NONE, XD_PITCH, XD_O1PITCH, XD_O2PITCH, XD_MASK, XD_O1MASK, XD_O2MASK, XD_MSPD, XD_VOL, XD_O1VOL, XD_O2VOL,
+       XD_NVOL, XD_NFREQ, XD_CUTF, XD_RESO, XD_DRIVE, XD_FENV, XD_PENV, XD_ATK, XD_REL, XD_PAN, XD_L1AMT, XD_L1SPD,
+       XD_L2AMT, XD_L2SPD, XD_FX1BAL, XD_FX2BAL, NXDEST };
+enum { XC_LIN, XC_SOFT, XC_HARD, XC_S, XC_BIP, NXCURVE };   /* BIP: the source rests at its middle (a CC at 64) */
+enum { XZ_ALL, XZ_LO, XZ_HI, NXZONE };     /* MPE's zones: the row hears notes of the lower, the upper, or both */
+#define MQ_MTX_ROWS 8
+/* the tunings: an equal division of the octave (its size apart), or a twelve-note temperament (KIST's) */
+enum { TS_EQUAL, TS_WERCKMEISTER3, TS_MEANTONE, TS_KIRNBERGER3, TS_VALLOTTI, NTS };
+#define MQ_MIDI_MPE 17                     /* the part's MIDI: 0 omni, 1..16 one channel, 17 MPE */
 /* FX1: off, then 16 of each family; FX2 the same */
 enum { F1_OFF, F1_CH = 1, F1_DT = 17, F1_BC = 33, F1_RM = 49, NF1 = 65 };
 enum { F2_OFF, F2_DL = 1, F2_RV = 17, F2_DT = 33, NF2 = 49 };
@@ -63,7 +73,14 @@ typedef struct {
     struct { uint8_t cutf, reso, mode, trk, extra, drive; mq_env_t env; } filt;   /* CUTF 0..127, RESO, TRK, DRIVE 0..99 */
     struct { int8_t start; uint8_t spd; int8_t end; uint8_t rsv; } pitch;   /* semitones -48..48, SPD 0..40 */
     struct { uint8_t amt, spd, dest, wave, dlay, dcay; } lfo[2];
-    struct { uint8_t dest; int8_t amt; } vel, wheel, at;   /* AMT -99..99 */
+    struct {
+        uint8_t src, dest;                 /* XS_*, XD_* */
+        int8_t amt;                        /* -99..99 */
+        uint8_t curve;                     /* XC_* */
+        uint8_t lo, hi;                    /* the part of the source's travel used: 0..99, 1..100 % */
+        uint8_t smooth;                    /* 0..99 (0: none .. 99: about half a second) */
+        uint8_t zone;                      /* XZ_* */
+    } mtx[MQ_MTX_ROWS];
     struct { uint8_t mode, vol; int8_t semi; uint8_t port, pans, rate, bend, rsv; } gen;
     struct { uint8_t t1, b1, t2, b2; } fx;  /* types (F1_*, F2_* + variant), balances 0..100 */
     struct { uint8_t type, spd2, hold, trig; } arp;   /* SPD in 2 BPM steps: 10..200 = 20..400 BPM */
@@ -71,10 +88,14 @@ typedef struct {
 
 /* the part's settings, not the sound's (kept with the setup) */
 typedef struct {
-    uint16_t a_hz10;                       /* A, tenths of a hertz: 4000..4700 */
+    uint16_t a_hz100;                      /* A, hundredths of a hertz: 30000..50099 */
+    uint8_t system;                        /* TS_* */
+    uint8_t edo;                           /* 5..72: steps to the octave, with TS_EQUAL */
+    uint8_t root;                          /* the temperament's root, 0 = C */
     uint8_t vel_curve;                     /* 0..5, 6 = MAX (velocity off) */
     uint8_t at_curve;                      /* 0..5 */
     uint8_t voices;                        /* 4..12 */
+    uint8_t midi;                          /* 0 omni, 1..16, MQ_MIDI_MPE */
     uint8_t rsv[3];
 } mq_global_t;
 
@@ -85,6 +106,11 @@ typedef struct {
     float load;                            /* the render's share of its time, 0..1 */
     uint32_t sounding[4];                  /* the MIDI notes sounding: bit k % 32 of word k / 32 */
     uint8_t loop_state, arp_on, cpu2;      /* LS_* */
+    /* the last note's expression, as the matrix sees it (0..1; bend -1..1), and which of them have come */
+    float x_vel, x_press, x_at, x_timbre, x_bend;
+    uint8_t x_has;                         /* bit 0 pressure, 1 aftertouch, 2 timbre, 3 bend */
+    uint8_t mpe_lower, mpe_upper;          /* MPE's zones: their member channels (0: none) */
+    int8_t x_ch;                           /* the last note's channel (0..15; -1 the FM-1's keys) */
     uint32_t loop_events, loop_len_ms, loop_pos_ms;
 } mq_meter_t;
 
@@ -104,22 +130,20 @@ void masque_note_on(int key, int vel);             /* vel 1..127 (raw: the part'
 void masque_note_off(int key);
 void masque_pressure(int key, int v);              /* a key's pressure 0..127 (poly aftertouch) */
 void masque_cc(int cc, int v);
-void masque_bend(int v14);                         /* 0..16383 */
 void masque_loop_rec(void);                        /* REC: arm / stop recording (and play) */
 void masque_loop_play(void);                       /* PLAY: play / stop */
 void masque_loop_clear(void);
 /* the render's own (MIDI in): the same, straight in */
-void masque_note_on_isr(int key, int vel);
-void masque_note_off_isr(int key);
-void masque_pressure_isr(int key, int v);
-void masque_chan_pressure_isr(int v);
-void masque_cc_isr(int cc, int v);
-void masque_bend_isr(int v14);
+/* a MIDI channel message (status 0x80..0xEF), as it came: the part's MIDI setting (omni, a channel, MPE) decides what
+ * it means (dsp/mpe.c: MPE as RP-053 has it, zones and all) */
+void masque_midi_isr(int status, int d1, int d2);
 void masque_clock_isr(int what);                   /* 0xF8 clock, 0xFA start, 0xFC stop */
 
 /* the oscillator, for the screen and the tools: one cycle of mask m (0..511.75) into out[n], -1..1 */
 void masque_mask_wave(float m, float *out, int n);
 const char *masque_name_of(int kind, int v);       /* NAME_* below: a value as the panel shows it */
-enum { NAME_LOOP, NAME_FMODE, NAME_EXTRA, NAME_PMODE, NAME_LWAVE, NAME_LDEST, NAME_MDEST, NAME_VDEST, NAME_FX1,
-       NAME_FX2, NAME_ARP, NAME_VCURVE };
+enum { NAME_LOOP, NAME_FMODE, NAME_EXTRA, NAME_PMODE, NAME_LWAVE, NAME_LDEST, NAME_XSRC, NAME_XDEST, NAME_FX1,
+       NAME_FX2, NAME_ARP, NAME_VCURVE, NAME_XCURVE, NAME_XZONE, NAME_TS, NAME_MIDI };
+/* the tuning, for the screen: each of the twelve notes' cents from equal temperament (A at 0) */
+void masque_tuning_cents(int system, int root, float out[12]);
 void masque_fx_name(int which, int t, char *out);  /* "CH03", "RV12", "OFF" */

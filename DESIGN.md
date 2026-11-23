@@ -21,13 +21,24 @@ counts its own control steps (5.5 kHz): envelopes, masks, pitches, the filter's 
 A voice is kept until its filter stops ringing, so a resonant release never clicks off.
 
 **Expression.** Velocity and the keys' pressure (poly aftertouch) from the FM-1's keys; the MASK1's play modes
-(slur detection at one or two semitones, paraphony, moly). The FM-1 has no wheels: bend and modulation over MIDI.
+(slur detection at one or two steps, paraphony, moly). The FM-1 has no wheels: bend and modulation over MIDI.
+
+**The matrix** (agreed 2026-11-24): eight rows kept in each sound, OPUS XIV's design (source, range, curve, smoothing,
+amount, destination, zone), replacing the MASK1's three routings, which become the factory sounds' first rows. A
+source that has never come leaves its rows alone. The levels are factors (a positive amount: the source brings the
+level up to full); the rest add. The part's destinations follow the last note.
+
+**MPE** (agreed 2026-11-24): OPUS XIV's MpeInput rules, rule by rule (dsp/mpe.c), for the Osmose above all; DIN into
+the TRS jack is the main path, USB host (a powered hub) the other. MPE notes are not slurred.
+
+**Tuning** (agreed 2026-11-24): KIST's, for the whole part, not per sound. Keys, SEMI, the octave, glides and bends in
+the tuning's steps; the arpeggiator's intervals rounded to the nearest steps; the filter's tracking by frequency.
 
 **Effects.** The MASK1's families and numbering; KIST-P's plate for the reverbs; a 16-bit floating-point delay line
 (0.74 s) so the delay fits beside the plate, the looper and the screen in the pool.
 
-**Storage.** The setup (the part's settings and the sound as it was left) and four banks of 32 user sounds, each a
-store object; all of them backed up over USB together.
+**Storage.** The setup (the part's settings and the sound as it was left) and six banks of 24 user sounds (128 used),
+each a store object; all of them backed up over USB together. A sound is 154 bytes with its matrix.
 
 **Panel.** Sections on the buttons as the MASK1 groups them (SEL the four voice sections, ENV their envelopes, EDIT the
 rest of the voice); the four knobs under the screen as a row of values; ALGORITHM the mask, the one number.

@@ -81,6 +81,45 @@ expect arp 0
 tap GLO
 expect sec 13
 shot global.png
+# GLO again: TUNING. 31 steps to the octave: OCT+ moves the keys 31 steps; A to 432
+tap GLO
+expect sec 14
+turn K4 19
+expect edo 31
+shot tuning_31.png
+tap OCT+
+expect note0 84
+tap OCT-
+expect note0 53
+turn K1 -8
+expect ahz 43200
+turn K3 2
+expect system 2
+shot tuning_meantone.png
+turn K3 -2
+turn K4 -19
+turn K1 8
+expect ahz 44000
+tap GLO
+expect sec 13
+# MPE: the part's MIDI to MPE (K1 to the end)
+turn K1 17
+expect midi 17
+shot global_mpe.png
+turn K1 -17
+expect midi 0
+# the MATRIX (EDIT twice from GLOBAL: PITCH, MATRIX): row 1 is VEL -> VOL; ALGORITHM moves to row 5
+tap EDIT
+tap EDIT
+expect sec 8
+expect x1src 1
+turn K3 10
+expect x1amt 50
+turn K3 -10
+shot matrix.png
+turn ALGO 4
+expect row 8
+turn ALGO -4
 # MIDI in from the TRS jack: a chord
 midi TRS 90 30 64
 midi TRS 90 3C 64
@@ -128,7 +167,7 @@ release OCT-
 expect octave 0
 # WRITE: SAVE twice writes the sound into U000; it is the sound now, kept across a power cycle
 tap SAVE
-expect sec 14
+expect sec 15
 shot write.png
 tap SAVE
 expect user0 1

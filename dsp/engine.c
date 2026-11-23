@@ -48,11 +48,21 @@ typedef struct {
     uint8_t gate;                          /* its key is down (or the pedal holds it) */
     uint8_t pedal;                         /* released while the pedal is down */
     uint8_t core2, dead, quick;            /* the second core renders it; to free; a fast fade (paraphonic) */
-    int8_t key;                            /* the key it sounds */
+    int8_t key;                            /* the key it sounds (a step of the tuning) */
+    int8_t ch;                             /* where its note came from: MIDI 0..15, CH_LOCAL, CH_ARP */
+    int8_t zone;                           /* its MPE zone: -1 none, 0 lower, 1 upper */
+    uint8_t member;                        /* on an MPE Member Channel */
+    uint8_t polyat_has;                    /* its key's own pressure has come (poly aftertouch, the FM-1's keys) */
     int8_t stack[6];                       /* slurred keys still down under it, the latest last */
     uint8_t nstack;
     uint32_t age;
-    float vel, at;                         /* velocity (after the curve) and pressure, 0..1 */
+    float vel, polyat, relvel, rnd;        /* velocity (after the curve), its key's pressure, release velocity, 0..1;
+                                            * a random value of its own, -1..1 */
+    float xs[MQ_MTX_ROWS];                 /* the matrix's rows, smoothed */
+    uint8_t xs_new;                        /* a new note: the rows start where they are, not from 0 */
+    float atk_x, rel_x;                    /* the matrix's ATK and REL: their time factors at the start and the release */
+    float pscale;                          /* the matrix's P ENV: the pitch envelope's depth */
+    float fk_v, dr_v, dc_v, cfb_v;         /* the filter's damping, drive in and out, the comb's feedback: this voice's */
     float pitch, pitch_to, glide;          /* semitones: now, where it glides, the glide's coefficient a step */
     float penv;                            /* the pitch envelope's offset */
     float pan;
@@ -72,7 +82,7 @@ typedef struct {
 
 static voice_t V[MQ_MAX_VOICES];
 static mq_patch_t P;                       /* the patch the render plays */
-static mq_global_t G = {4400, 2, 2, MQ_DEFAULT_VOICES, {0}};
+static mq_global_t G = {44000, TS_EQUAL, 12, 0, 2, 2, MQ_DEFAULT_VOICES, 0, {0, 0, 0}};
 static mq_meter_t meter;
 
 /* what the patch gives, worked out when it comes */
@@ -90,19 +100,32 @@ static struct {
     float mspd[2];                         /* the mask envelopes' speeds, masks a step */
     float lfo_hz[2];
     float vol;
+    float xc[MQ_MTX_ROWS];                 /* the rows' smoothing, a step */
 } D;
+
+/* a channel's expression, as MIDI and MPE left it (dsp/mpe.c) */
+typedef struct {
+    float bend;                            /* -1..1 */
+    float range;                           /* its bend range, semitones (steps); 0: the sound's BEND */
+    float press, at, timbre;               /* 0..1 */
+    uint8_t has_press, has_at, has_timbre;
+} chx_t;
 
 /* the part: controllers and the LFOs */
 static struct {
-    float bend, bend_to, wheel, chat;
-    float at_all;                          /* aftertouch for the part (the LFOs, the effects): the channel's, or the
-                                            * strongest key's (the FM-1's keys give each its own) */
+    float wheel;
+    chx_t chx[16];
+    uint8_t cc[128];                       /* every CC's last value, for the matrix's CC sources */
+    uint8_t zone_press[2];                 /* MPE: pressure has come on the zone's Member Channels */
+    float gx[NXDEST];                      /* the part's destinations (from XD_L1AMT), from the last note */
+    float gxs[MQ_MTX_ROWS];
     int sustain;
     float lph[2], lval[2][NSTEP + 1], lhold[2], lenv_t;
     uint32_t lrng;
     float fx_t1, fx_t2, fx_b2, lfo_fx_dummy;
     float last_pitch;                      /* the last note's pitch, for the glides */
     int last_voice;
+    int note_ch;                           /* the channel of the note being started (eng_note_on) */
     uint32_t clock;
     int held;                              /* keys down (as played to the voices) */
     /* paraphonic: one set of envelopes for every voice */
@@ -161,6 +184,8 @@ static void derive(void)
         D.lfo_hz[i] = 0.03f * fm_exp2f((float)P.lfo[i].spd / 9.9f);   /* 0.03 .. 30 Hz */
     }
     D.vol = level_gain(P.gen.vol);
+    for (i = 0; i < MQ_MTX_ROWS; i++)      /* 0: at once; 99: about half a second */
+        D.xc[i] = P.mtx[i].smooth ? 1.0f - fm_expf(-DT / (0.005f * (float)P.mtx[i].smooth)) : 1.0f;
     for (i = 0; i < MQ_MAX_VOICES; i++)
         if (V[i].used)
             voice_rates(&V[i]);
@@ -170,14 +195,11 @@ static void derive(void)
 static void voice_rates(voice_t *v)
 {
     float ks = P.gen.rate ? fm_exp2f(-((float)v->key - 60.0f) / 24.0f * (float)P.gen.rate / 50.0f) : 1.0f;
-    float va = 1.0f;
     int e;
-    if (P.vel.dest == VD_ATK && P.vel.amt)  /* + : harder is faster */
-        va = fm_exp2f(-(float)P.vel.amt / 99.0f * 4.0f * (v->vel - 0.5f));
     for (e = 0; e < NENV; e++) {
-        v->att[e] = rate_step(D.t_a[e] * ks * va);
+        v->att[e] = rate_step(D.t_a[e] * ks * v->atk_x);
         v->dec[e] = exp_coef(D.t_d[e] * ks);
-        v->rel[e] = exp_coef(D.t_r[e] * ks);
+        v->rel[e] = exp_coef(D.t_r[e] * ks * v->rel_x);
     }
 }
 
@@ -245,14 +267,7 @@ static void lfo_block(uint32_t steps)
 {
     int i;
     uint32_t s;
-    float wheel_amt[2] = {0, 0}, wheel_spd[2] = {0, 0};
-    for (i = 0; i < 2; i++) {               /* the wheel's and aftertouch's hold on the LFOs */
-        float w = P.wheel.amt / 99.0f * S.wheel, a = P.at.amt / 99.0f * S.at_all;
-        if (P.wheel.dest == (i ? MD_L2AMT : MD_L1AMT)) wheel_amt[i] += w;
-        if (P.at.dest == (i ? MD_L2AMT : MD_L1AMT)) wheel_amt[i] += a;
-        if (P.wheel.dest == (i ? MD_L2SPD : MD_L1SPD)) wheel_spd[i] += w;
-        if (P.at.dest == (i ? MD_L2SPD : MD_L1SPD)) wheel_spd[i] += a;
-    }
+    float wheel_amt[2] = {S.gx[XD_L1AMT], S.gx[XD_L2AMT]}, wheel_spd[2] = {S.gx[XD_L1SPD], S.gx[XD_L2SPD]};
     for (s = 0; s <= steps; s++) {
         for (i = 0; i < 2; i++) {
             float amt = (float)P.lfo[i].amt / 99.0f + wheel_amt[i], env = 1.0f, hz, ph;
@@ -283,6 +298,8 @@ static void lfo_block(uint32_t steps)
 /* ------------------------------------------------------------------------------------------- modulation --- */
 typedef struct {
     float freq, vol, filt, mask, pan, o1freq, o1vol, o1mask, o2freq, o2vol, o2mask, nfreq, nvol;
+    /* the matrix's own: levels as factors, the rest added (pitch in steps, masks in masks, the filter in semitones) */
+    float xvol, xo1vol, xo2vol, xnvol, reso, drive, fenv, mspd, atk, rel, penv;
 } mods_t;
 
 /* an amount (-1..1 of its range) into a destination, in that destination's units */
@@ -305,22 +322,181 @@ static void mod_lfo(mods_t *m, int dest, float x)
     default: break;                        /* the effects': taken per block (fx_mods) */
     }
 }
-static void mod_ctl(mods_t *m, int dest, float x)   /* the wheel and aftertouch (x: amount x position) */
+/* ------------------------------------------------------------------------------------- the matrix --- */
+static const uint8_t X_BIPOLAR[XS_CC0] = {0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1};   /* BEND, KEY, the LFOs, RAND */
+
+static int local_ch(void) { return G.midi >= 1 && G.midi <= 16 ? G.midi - 1 : 0; }
+static float chx_range(int c) { return S.chx[c].range > 0.0f ? S.chx[c].range : (float)P.gen.bend; }
+
+/* a note's bend in steps: its channel's, and its zone's Master's (MPE); the FM-1's keys and the arpeggiator's follow
+ * the part's channel */
+static float voice_bend(const voice_t *v)
 {
-    switch (dest) {
-    case MD_FLT: m->filt += x * 60.0f; break;
-    case MD_VOL: m->vol += x; break;
-    case MD_MASK: m->mask += x * fm_fabsf(x) * 256.0f; break;
-    case MD_FREQ: m->freq += x * 12.0f; break;
-    case MD_O1VOL: m->o1vol += x; break;
-    case MD_O1MASK: m->o1mask += x * fm_fabsf(x) * 256.0f; break;
-    case MD_O2VOL: m->o2vol += x; break;
-    case MD_O2MASK: m->o2mask += x * fm_fabsf(x) * 256.0f; break;
-    case MD_NFREQ: m->nfreq += x * 50.0f; break;
-    case MD_NVOL: m->nvol += x; break;
-    default: break;
+    int c = v->ch < 16 ? v->ch : local_ch();
+    float b = S.chx[c].bend * chx_range(c);
+    if (v->member && v->zone >= 0) {
+        int m = v->zone ? 15 : 0;
+        b += S.chx[m].bend * chx_range(m);
+    }
+    return b;
+}
+
+/* a source's value for a voice now (0..1, or -1..1 for the bipolar ones); *has 0: it has never come */
+static float src_val(const voice_t *v, int src, uint32_t step, int *has)
+{
+    int c = v->ch < 16 ? v->ch : local_ch(), m = v->zone ? 15 : 0;
+    *has = 1;
+    switch (src) {
+    case XS_VEL: return v->vel;
+    case XS_REL: return v->relvel;
+    case XS_PRESS:                         /* MPE pressure: its Member Channel's, once the zone has sent any */
+        if (v->member && v->zone >= 0 && S.zone_press[v->zone]) return S.chx[v->ch].press;
+        *has = 0;
+        return 0.0f;
+    case XS_AT:                            /* its key's own, else its channel's (or its zone's Master's) */
+        if (v->polyat_has) return v->polyat;
+        if (v->member && v->zone >= 0) c = m;
+        if (S.chx[c].has_at) return S.chx[c].at;
+        *has = 0;
+        return 0.0f;
+    case XS_TIMBRE:
+        if (S.chx[c].has_timbre) return S.chx[c].timbre;
+        if (v->member && v->zone >= 0 && S.chx[m].has_timbre) return S.chx[m].timbre;
+        *has = 0;
+        return 0.0f;
+    case XS_BEND: {
+        float b = S.chx[c].bend;
+        if (v->member && v->zone >= 0) b += S.chx[m].bend;
+        return b < -1.0f ? -1.0f : b > 1.0f ? 1.0f : b;
+    }
+    case XS_WHEEL: return S.wheel;
+    case XS_KEY: { float k = ((float)v->key - 60.0f) / 48.0f; return k < -1.0f ? -1.0f : k > 1.0f ? 1.0f : k; }
+    case XS_LFO1: return fm_clampf(S.lval[0][step], -1.0f, 1.0f);
+    case XS_LFO2: return fm_clampf(S.lval[1][step], -1.0f, 1.0f);
+    case XS_FENV: return v->env[E_F].lvl;
+    case XS_RAND: return v->rnd;
+    default:
+        if (src >= XS_CC0 && src < NXSRC) return (float)S.cc[src - XS_CC0] / 127.0f;
+        *has = 0;
+        return 0.0f;
     }
 }
+
+/* a row's value: its part of the source's travel, its curve, its amount (-1..1) */
+static float row_shape(int r, float u, int bip)
+{
+    const float lo = 0.01f * (float)P.mtx[r].lo, hi = 0.01f * (float)P.mtx[r].hi;
+    float sgn = 1.0f, a, span = hi - lo;
+    if (P.mtx[r].curve == XC_BIP && !bip) {
+        u = 2.0f * u - 1.0f;               /* a source at rest in its middle (a CC at 64) */
+        bip = 1;
+    }
+    if (bip) {
+        sgn = u < 0.0f ? -1.0f : 1.0f;
+        u = fm_fabsf(u);
+    }
+    a = (u - lo) / (span < 0.01f ? 0.01f : span);
+    a = a < 0.0f ? 0.0f : a > 1.0f ? 1.0f : a;
+    switch (P.mtx[r].curve) {
+    case XC_SOFT: a = fm_sqrtf(a); break;
+    case XC_HARD: a = a * a; break;
+    case XC_S: a = a * a * (3.0f - 2.0f * a); break;
+    default: break;
+    }
+    return sgn * a * (float)P.mtx[r].amt / 99.0f;
+}
+
+/* a row's value into its destination. Levels are factors: a positive amount lets the source bring the level up to
+ * full (none of it: the level less the amount), a negative one takes it down; the rest add */
+static void x_dest(mods_t *m, int d, float x, float u, int bip, int r)
+{
+    float a = (float)P.mtx[r].amt / 99.0f;
+    switch (d) {
+    case XD_VOL: case XD_O1VOL: case XD_O2VOL: case XD_NVOL: {
+        float f;
+        if (bip) f = 1.0f + 0.5f * x;
+        else f = a >= 0.0f ? 1.0f - a + x : 1.0f + x;
+        if (f < 0.0f) f = 0.0f;
+        if (d == XD_VOL) m->xvol *= f;
+        else if (d == XD_O1VOL) m->xo1vol *= f;
+        else if (d == XD_O2VOL) m->xo2vol *= f;
+        else m->xnvol *= f;
+        break;
+    }
+    case XD_PITCH: m->freq += x * 24.0f; break;
+    case XD_O1PITCH: m->o1freq += x * 24.0f; break;
+    case XD_O2PITCH: m->o2freq += x * 24.0f; break;
+    case XD_MASK: m->mask += x * 128.0f; break;
+    case XD_O1MASK: m->o1mask += x * 128.0f; break;
+    case XD_O2MASK: m->o2mask += x * 128.0f; break;
+    case XD_MSPD: m->mspd += x * 4.0f; break;
+    case XD_NFREQ: m->nfreq += x * 50.0f; break;
+    case XD_CUTF: m->filt += x * 72.0f; break;
+    case XD_RESO: m->reso += x * 99.0f; break;
+    case XD_DRIVE: m->drive += x * 99.0f; break;
+    case XD_FENV: m->fenv += x; break;
+    case XD_PENV: m->penv += x; break;
+    case XD_ATK: m->atk += x * 4.0f; break;
+    case XD_REL: m->rel += x * 4.0f; break;
+    case XD_PAN: m->pan += x; break;
+    default: break;
+    }
+    (void)u;
+}
+
+static void mods_clear(mods_t *m)
+{
+    memset(m, 0, sizeof *m);
+    m->xvol = m->xo1vol = m->xo2vol = m->xnvol = 1.0f;
+}
+
+/* the matrix's rows for a voice, at a step: into m (the voice's destinations), smoothed per row */
+static void x_voice(voice_t *v, mods_t *m, uint32_t step)
+{
+    int r;
+    for (r = 0; r < MQ_MTX_ROWS; r++) {
+        int src = P.mtx[r].src, d = P.mtx[r].dest, has, bip;
+        float u, x;
+        if (!src || !d || !P.mtx[r].amt || d >= XD_L1AMT)
+            continue;
+        if (P.mtx[r].zone == XZ_LO && v->zone == 1) continue;
+        if (P.mtx[r].zone == XZ_HI && v->zone != 1) continue;
+        u = src_val(v, src, step, &has);
+        if (!has)
+            continue;                      /* a source that never came leaves the sound alone */
+        bip = src < XS_CC0 && X_BIPOLAR[src];
+        x = row_shape(r, u, bip);
+        if (v->xs_new)
+            v->xs[r] = x;
+        else
+            v->xs[r] += (x - v->xs[r]) * D.xc[r];
+        x_dest(m, d, v->xs[r], u, bip, r);
+    }
+    v->xs_new = 0;
+}
+
+/* the part's destinations (the LFOs' amounts and speeds, the effects' balances), from the last note's sources */
+static void x_part(void)
+{
+    const voice_t *v = &V[S.last_voice];
+    int r;
+    for (r = XD_L1AMT; r < NXDEST; r++)
+        S.gx[r] = 0.0f;
+    for (r = 0; r < MQ_MTX_ROWS; r++) {
+        int src = P.mtx[r].src, d = P.mtx[r].dest, has, bip;
+        float u, x;
+        if (!src || d < XD_L1AMT || d >= NXDEST || !P.mtx[r].amt)
+            continue;
+        u = src_val(v, src, 0, &has);
+        if (!has)
+            continue;
+        bip = src < XS_CC0 && X_BIPOLAR[src];
+        x = row_shape(r, u, bip);
+        S.gxs[r] += (x - S.gxs[r]) * D.xc[r];
+        S.gx[d] += S.gxs[r];
+    }
+}
+
 static inline float volmul(float x) { x += 1.0f; return x < 0.0f ? 0.0f : x; }
 
 /* --------------------------------------------------------------------------------------------- the step --- */
@@ -328,22 +504,11 @@ static void voice_control(voice_t *v, uint32_t step)
 {
     mods_t m;
     int i, para = P.gen.mode == PM_PARA || P.gen.mode == PM_PARA_SLUR;
-    float lvl[NENV], base, a_ref = (float)G.a_hz10 * 0.1f;
-    memset(&m, 0, sizeof m);
+    float lvl[NENV], base, l2osc1 = 8.0f;
+    mods_clear(&m);
     mod_lfo(&m, P.lfo[0].dest, S.lval[0][step]);
     mod_lfo(&m, P.lfo[1].dest, S.lval[1][step]);
-    if (P.wheel.amt)
-        mod_ctl(&m, P.wheel.dest, (float)P.wheel.amt / 99.0f * S.wheel);
-    if (P.at.amt) {
-        float at = v->at > S.chat ? v->at : S.chat;
-        mod_ctl(&m, P.at.dest, (float)P.at.amt / 99.0f * at);
-    }
-    if (P.vel.amt) {
-        float x = (float)P.vel.amt / 99.0f, vv = v->vel;
-        if (P.vel.dest == VD_FLT) m.filt += x * (vv - 0.5f) * 72.0f;
-        else if (P.vel.dest == VD_VOL) m.vol += x > 0.0f ? -x * (1.0f - vv) : -x * vv;
-        else if (P.vel.dest == VD_MASK) m.mask += x * vv * 128.0f;
-    }
+    x_voice(v, &m, step);
     /* the envelopes */
     if (!para)
         for (i = 0; i < NENV; i++)
@@ -370,19 +535,23 @@ static void voice_control(voice_t *v, uint32_t step)
     } else {
         v->penv = 0.0f;
     }
-    base = v->pitch + v->penv + (float)P.gen.semi + S.bend * (float)P.gen.bend + m.freq;
+    /* in steps of the tuning: the note, its pitch envelope (the matrix's P ENV its depth), SEMI, the bends */
+    v->pscale = 1.0f + m.penv;
+    base = v->pitch + v->penv * (v->pscale < 0.0f ? 0.0f : v->pscale) + (float)P.gen.semi + voice_bend(v) + m.freq;
     for (i = 0; i < 2; i++) {
         osc_t *o = &v->o[i];
         const mq_osc_t *q = &P.osc[i];
-        float semis = base + (float)q->semi + 0.01f * (float)q->tune + (i ? m.o2freq : m.o1freq);
-        float hz = a_ref * fm_exp2f((semis - 69.0f) / 12.0f), pos;
+        float steps = base + (float)q->semi + (i ? m.o2freq : m.o1freq);
+        float l2 = tuning_l2(steps) + (float)q->tune / 1200.0f, hz = fm_exp2f(l2), pos;
         uint32_t m4;
+        if (!i)
+            l2osc1 = l2;
         if (hz > 18000.0f) hz = 18000.0f;
         if (hz < 1.0f) hz = 1.0f;
         o->inc = (uint32_t)(hz * (4294967296.0f / (OS * FS)));
         /* the mask envelope: from START towards MASK, at SPD, looping or not */
         if (D.mspd[i] > 0.0f && q->start) {
-            float sp = D.mspd[i], st = (float)q->start;
+            float sp = D.mspd[i] * (m.mspd != 0.0f ? fm_exp2f(m.mspd) : 1.0f), st = (float)q->start;
             if (o->mdir > 0.0f) {          /* towards MASK (0) */
                 if (o->mdelta > 0.0f) o->mdelta = o->mdelta - sp < 0.0f ? 0.0f : o->mdelta - sp;
                 else o->mdelta = o->mdelta + sp > 0.0f ? 0.0f : o->mdelta + sp;
@@ -405,7 +574,8 @@ static void voice_control(voice_t *v, uint32_t step)
         m4 = (uint32_t)(pos * 4.0f);
         if (m4 != o->tab.m)
             bm_build(&o->tab, m4);
-        o->g_to = v->quick ? 0.0f : D.lv[i] * lvl[i] * o->tab.norm * volmul(m.vol) * volmul(i ? m.o2vol : m.o1vol);
+        o->g_to = v->quick ? 0.0f : D.lv[i] * lvl[i] * o->tab.norm * volmul(m.vol) * volmul(i ? m.o2vol : m.o1vol) *
+                                    m.xvol * (i ? m.xo2vol : m.xo1vol);
         if (v == &V[S.last_voice])
             meter.mask_now[i] = pos;
     }
@@ -419,20 +589,31 @@ static void voice_control(voice_t *v, uint32_t step)
             hz = FS * fm_exp2f((f - 99.0f) / 7.5f);   /* 99: every sample; 0: 7 Hz */
             v->ninc = (uint32_t)(hz * (4294967296.0f / FS));
         }
-        v->ng_to = v->quick ? 0.0f : D.lv[E_N] * lvl[E_N] * volmul(m.vol) * volmul(m.nvol);
+        v->ng_to = v->quick ? 0.0f : D.lv[E_N] * lvl[E_N] * volmul(m.vol) * volmul(m.nvol) * m.xvol * m.xnvol;
     }
     /* the filter */
     {
-        float c = (float)P.filt.cutf + (float)P.filt.trk / 99.0f * (v->pitch + (float)P.osc[0].semi - 60.0f) + m.filt;
-        float fe = D.lv[E_F] * lvl[E_F], hz;
-        if (P.vel.dest == VD_FEG && P.vel.amt)
-            fe *= 1.0f + (float)P.vel.amt / 99.0f * (v->vel - 1.0f);
+        /* tracking OSC 1's frequency itself (in any tuning): 12 semitones of cutoff an octave */
+        float c = (float)P.filt.cutf + (float)P.filt.trk / 99.0f * 12.0f * (l2osc1 - 8.0313597f) + m.filt;
+        float fe = D.lv[E_F] * lvl[E_F] * (1.0f + m.fenv < 0.0f ? 0.0f : 1.0f + m.fenv), hz;
         c += fe;
         hz = hz_of(c);
         if (hz < 16.0f) hz = 16.0f;
         if (hz > 0.45f * FS) hz = 0.45f * FS;
         v->fg_to = fm_tanf(FM_PI * hz / FS);
-        v->fk = D.fk;
+        if (m.reso != 0.0f || m.drive != 0.0f) {   /* the matrix moves them: this voice's own */
+            float r = fm_clampf(((float)P.filt.reso + m.reso) / 99.0f, 0.0f, 1.0f);
+            float dr = fm_clampf((float)P.filt.drive + m.drive, 0.0f, 99.0f);
+            v->fk_v = 2.0f - 1.995f * r * (2.0f - r);
+            v->cfb_v = (P.filt.mode == FM_COMBN ? -1.0f : 1.0f) * (0.35f + 0.63f * fm_sqrtf(r));
+            v->dr_v = fm_exp2f(dr / 99.0f * 4.5f);
+            v->dc_v = 1.0f / fm_sqrtf(v->dr_v);
+        } else {
+            v->fk_v = D.fk;
+            v->cfb_v = D.cfb;
+            v->dr_v = D.drive;
+            v->dc_v = D.dcomp;
+        }
         if (P.filt.mode >= FM_COMBP) {     /* the comb's length: one period of the cutoff */
             float d = FS / (hz < 90.0f ? 90.0f : hz);
             v->cd_to = d < 2.0f ? 2.0f : d;
@@ -533,11 +714,11 @@ static void voice_block(voice_t *v, float *outl, float *outr, uint32_t n, uint32
         fg = v->fg;
         dfg = (v->fg_to - fg) / (float)k;
         {
-            float k_ = v->fk, s1 = v->s1, s2 = v->s2, s3 = v->s3, s4 = v->s4, s5 = v->s5, s6 = v->s6;
-            float dr = D.drive, dc = D.dcomp;
-            int mode = P.filt.mode, x = P.filt.extra, sat = P.filt.drive > 0;
+            float k_ = v->fk_v, s1 = v->s1, s2 = v->s2, s3 = v->s3, s4 = v->s4, s5 = v->s5, s6 = v->s6;
+            float dr = v->dr_v, dc = v->dc_v;
+            int mode = P.filt.mode, x = P.filt.extra, sat = dr > 1.001f;
             if (mode >= FM_COMBP) {
-                float *cb = combbuf[v - V], cd = v->cd, dcd = (v->cd_to - v->cd) / (float)k, fb = D.cfb, lp = v->clp;
+                float *cb = combbuf[v - V], cd = v->cd, dcd = (v->cd_to - v->cd) / (float)k, fb = v->cfb_v, lp = v->clp;
                 uint32_t w = v->cw;
                 for (j = 0; j < k; j++) {
                     float r = (float)w - cd, f, a, b, in = y[j];
@@ -664,13 +845,23 @@ static int slur_mode(void) { return P.gen.mode == PM_SLUR || P.gen.mode == PM_PA
 
 static void voice_free(voice_t *v) { v->used = 0; v->gate = 0; v->dead = 0; v->quick = 0; v->nstack = 0; }
 
-static int voice_find_key(int key)          /* the voice sounding key, held or not: -1 none */
+static int voice_find_key(int key, int ch)  /* the voice sounding key from ch, held or not: -1 none */
 {
     int i, best = -1;
     for (i = 0; i < MQ_MAX_VOICES; i++)
-        if (V[i].used && V[i].key == key && (best < 0 || V[i].age > V[best].age))
+        if (V[i].used && V[i].key == key && V[i].ch == ch && (best < 0 || V[i].age > V[best].age))
             best = i;
     return best;
+}
+
+/* the voice takes the note's channel: its MPE zone, whether it is a Member's (its own bend, pressure, timbre) */
+static void voice_set_ch(voice_t *v, int ch)
+{
+    v->ch = (int8_t)ch;
+    v->zone = (int8_t)(ch < 16 ? mpe_zone_of(ch) : -1);
+    v->member = (uint8_t)(ch < 16 && mpe_is_member(ch));
+    v->polyat_has = 0;
+    v->polyat = 0.0f;
 }
 
 static int voice_alloc(void)
@@ -721,7 +912,8 @@ static void voice_start(voice_t *v, int key, float vel, int retrig, int glide_fr
     v->key = (int8_t)key;
     v->trk = (float)key;
     v->vel = vel;
-    v->at = 0.0f;
+    v->relvel = 0.0f;
+    voice_set_ch(v, S.note_ch);
     v->age = ++age_now;
     v->pitch_to = (float)key;
     if (glide_from_last && D.port_c > 0.0f && from > 0.0f) {
@@ -732,8 +924,6 @@ static void voice_start(voice_t *v, int key, float vel, int retrig, int glide_fr
         v->glide = 0.0f;
     }
     v->penv = (float)P.pitch.start;
-    if (P.vel.dest == VD_PEG && P.vel.amt)
-        v->penv *= 1.0f + (float)P.vel.amt / 99.0f * (vel - 1.0f);
     for (i = 0; i < 2; i++) {
         osc_t *o = &v->o[i];
         o->mdelta = (float)P.osc[i].start;
@@ -770,6 +960,15 @@ static void voice_start(voice_t *v, int key, float vel, int retrig, int glide_fr
         static int side;
         side = !side;
         v->pan = (float)P.gen.pans / 99.0f * (side ? 1.0f : -1.0f) * (0.6f + 0.4f * fm_fabsf(eng_frand(&v->rng)));
+    }
+    v->rnd = eng_frand(&v->rng);
+    v->xs_new = 1;
+    {   /* the matrix at the note's start: where its rows begin, and its ATK */
+        mods_t m;
+        mods_clear(&m);
+        x_voice(v, &m, 0);
+        v->atk_x = fm_exp2f(-m.atk);
+        v->rel_x = 1.0f;
     }
     voice_rates(v);
     for (e = 0; e < NENV; e++)
@@ -822,13 +1021,14 @@ static int any_gate(void)
     return 0;
 }
 
-void eng_note_on(int key, float vel, int legato)
+void eng_note_on(int key, float vel, int legato, int ch)
 {
     int mode = P.gen.mode, i, held_before = any_gate();
     voice_t *v;
     if (key < 0 || key > 127)
         return;
     S.held++;
+    S.note_ch = ch;
     if (mono_mode()) {
         int legato_now = mono.n > 0 || legato;
         voice_t *mv = &V[0];
@@ -838,6 +1038,7 @@ void eng_note_on(int key, float vel, int legato)
             if (V[i].used)
                 V[i].quick = 1, V[i].gate = 0;
         if (sounding && legato_now) {
+            voice_set_ch(mv, ch);
             voice_move(mv, key, mode == PM_MONO || D.port_c > 0.0f);
             if (mode != PM_MONO_PORTA && mode != PM_MONO && D.port_c <= 0.0f)
                 mv->glide = 0.0f;
@@ -856,8 +1057,9 @@ void eng_note_on(int key, float vel, int legato)
         }
         return;
     }
-    /* slurred: a key next to one held (two semitones or less) takes that voice over */
-    if (slur_mode() || legato) {
+    /* slurred: a key next to one held (two steps or less) takes that voice over. Not an MPE note: its own bend
+     * slides it */
+    if ((slur_mode() && !(ch < 16 && mpe_is_member(ch))) || legato) {
         int best = -1, bd = 99;
         for (i = 0; i < MQ_MAX_VOICES; i++) {
             int d = V[i].key - key;
@@ -871,13 +1073,14 @@ void eng_note_on(int key, float vel, int legato)
             v = &V[best];
             if (v->nstack < 6)
                 v->stack[v->nstack++] = v->key;
+            voice_set_ch(v, ch);
             voice_move(v, key, 1);
             if (!legato && D.port_c <= 0.0f)
                 v->glide = 0.4f;           /* a slur always slides a little */
             return;
         }
     }
-    i = voice_find_key(key);
+    i = voice_find_key(key, ch);
     if (i < 0 || V[i].gate)
         i = voice_alloc();
     v = &V[i];
@@ -907,6 +1110,15 @@ static void voice_let_go(voice_t *v)
         return;
     }
     v->gate = 0;
+    {   /* the matrix's REL, now the release velocity is known */
+        mods_t m;
+        mods_clear(&m);
+        x_voice(v, &m, 0);
+        if (m.rel != 0.0f) {
+            v->rel_x = fm_exp2f(m.rel);
+            voice_rates(v);
+        }
+    }
     if (para_mode()) {
         if (any_gate()) {
             v->quick = 1;
@@ -920,7 +1132,7 @@ static void voice_let_go(voice_t *v)
         env_release(&v->env[e]);
 }
 
-void eng_note_off(int key)
+void eng_note_off(int key, int relvel, int ch)
 {
     int i;
     if (S.held > 0)
@@ -931,6 +1143,7 @@ void eng_note_off(int key)
         mono_pull(key);
         if (!mv->used)
             return;
+        mv->relvel = (float)relvel / 127.0f;
         if (mono.n && was_top) {           /* back to the key still down, legato */
             voice_move(mv, mono.k[mono.n - 1], P.gen.mode == PM_MONO || D.port_c > 0.0f);
         } else if (!mono.n) {
@@ -947,8 +1160,9 @@ void eng_note_off(int key)
             if (v->stack[j] != key)
                 v->stack[k++] = v->stack[j];
         v->nstack = (uint8_t)k;
-        if (v->key != key)
+        if (v->key != key || (v->ch != ch && !v->nstack))
             continue;
+        v->relvel = (float)relvel / 127.0f;
         if (v->nstack) {                   /* its top key let go: back to the one below */
             voice_move(v, v->stack[--v->nstack], 1);
             if (D.port_c <= 0.0f)
@@ -974,9 +1188,7 @@ void eng_ctl(int type, int a)
 {
     int i;
     switch (type) {
-    case SQ_BEND: S.bend_to = (float)(a - 8192) / 8192.0f; break;
     case SQ_WHEEL: S.wheel = (float)a / 127.0f; break;
-    case SQ_CHAT: S.chat = (float)a / 127.0f; break;
     case SQ_SUSTAIN:
         S.sustain = a >= 64;
         if (!S.sustain)
@@ -986,17 +1198,65 @@ void eng_ctl(int type, int a)
                     voice_let_go(&V[i]);
                 }
         break;
+    default:
+        if (type >= SQ_CC0 && type < SQ_CC0 + 128)
+            S.cc[type - SQ_CC0] = (uint8_t)a;
+        break;
+    }
+}
+
+static float at_curve(int v);
+
+/* a channel's expression: the voices on it read it at their next step */
+void eng_expr(int ch, int kind, int v)
+{
+    chx_t *c;
+    int i;
+    if (ch < 0 || ch > 15)
+        return;
+    c = &S.chx[ch];
+    switch (kind) {
+    case EX_BEND: c->bend = (float)v / (v < 0 ? 8192.0f : 8191.0f); break;
+    case EX_PRESS:
+        c->press = (float)v / 16383.0f;
+        c->has_press = 1;
+        if (mpe_zone_of(ch) >= 0)
+            S.zone_press[mpe_zone_of(ch)] = 1;
+        break;
+    case EX_AT: c->at = at_curve(v >> 7); c->has_at = 1; break;
+    case EX_TIMBRE: c->timbre = (float)v / 16383.0f; c->has_timbre = 1; break;
+    case EX_RANGE: c->range = 0.01f * (float)v; break;
+    case EX_RESET:                         /* the channel forgets; its notes stop (an MCM, §2.1.4) */
+        c->bend = c->press = c->at = c->timbre = 0.0f;
+        c->has_press = c->has_at = c->has_timbre = 0;
+        if (mpe_zone_of(ch) >= 0)
+            S.zone_press[mpe_zone_of(ch)] = 0;
+        for (i = 0; i < MQ_MAX_VOICES; i++)
+            if (V[i].used && V[i].gate && V[i].ch == ch)
+                voice_let_go(&V[i]);
+        break;
     default: break;
     }
 }
 
+/* a key's own pressure: poly aftertouch from MIDI, or the FM-1's keys */
+void eng_poly_pressure(int key, int ch, int v)
+{
+    int i;
+    for (i = 0; i < MQ_MAX_VOICES; i++)
+        if (V[i].used && V[i].gate && V[i].key == key && V[i].ch == ch) {
+            V[i].polyat = at_curve(v);
+            V[i].polyat_has = 1;
+        }
+}
+
 /* ------------------------------------------------------------------------------------------- the queue --- */
-enum { EV_ON, EV_OFF, EV_PRESS, EV_CC, EV_BEND, EV_LREC, EV_LPLAY, EV_LCLEAR };
+enum { EV_ON, EV_OFF, EV_PRESS, EV_MIDI, EV_LREC, EV_LPLAY, EV_LCLEAR };
 typedef struct { uint8_t t, a, b, c; } ev_t;
 #define QN 64u
 static ev_t q[QN];
 static volatile uint32_t q_w, q_r;
-static void put(int t, int a, int b)
+static void put4(int t, int a, int b, int c)
 {
     uint32_t w = q_w;
     if (w - q_r >= QN)
@@ -1004,6 +1264,7 @@ static void put(int t, int a, int b)
     q[w % QN].t = (uint8_t)t;
     q[w % QN].a = (uint8_t)a;
     q[w % QN].b = (uint8_t)b;
+    q[w % QN].c = (uint8_t)c;
     __asm__ volatile("" ::: "memory");
     q_w = w + 1;
 }
@@ -1022,43 +1283,15 @@ static float at_curve(int v)
     return x <= 0.0f ? 0.0f : fm_powf(x, E[G.at_curve % 6]);
 }
 
-void masque_note_on(int key, int vel) { put(EV_ON, key, vel); }
-void masque_note_off(int key) { put(EV_OFF, key, 0); }
-void masque_pressure(int key, int v) { put(EV_PRESS, key, v); }
-void masque_cc(int cc, int v) { put(EV_CC, cc, v); }
-void masque_bend(int v14) { put(EV_BEND, v14 & 127, v14 >> 7); }
-void masque_loop_rec(void) { put(EV_LREC, 0, 0); }
-void masque_loop_play(void) { put(EV_LPLAY, 0, 0); }
-void masque_loop_clear(void) { put(EV_LCLEAR, 0, 0); }
+void masque_note_on(int key, int vel) { put4(EV_ON, key, vel, 0); }
+void masque_note_off(int key) { put4(EV_OFF, key, 0, 0); }
+void masque_pressure(int key, int v) { put4(EV_PRESS, key, v, 0); }
+void masque_cc(int cc, int v) { put4(EV_MIDI, 0xB0, cc, v); }
+void masque_loop_rec(void) { put4(EV_LREC, 0, 0, 0); }
+void masque_loop_play(void) { put4(EV_LPLAY, 0, 0, 0); }
+void masque_loop_clear(void) { put4(EV_LCLEAR, 0, 0, 0); }
 
-void masque_note_on_isr(int key, int vel)
-{
-    if (vel <= 0)
-        seq_note_off(key);
-    else
-        seq_note_on(key, vel);
-}
-void masque_note_off_isr(int key) { seq_note_off(key); }
-void masque_pressure_isr(int key, int v)
-{
-    int i;
-    for (i = 0; i < MQ_MAX_VOICES; i++)
-        if (V[i].used && V[i].gate && V[i].key == key)
-            V[i].at = at_curve(v);
-}
-void masque_chan_pressure_isr(int v) { seq_ctl(SQ_CHAT, v); }
-void masque_cc_isr(int cc, int v)
-{
-    if (cc == 1)
-        seq_ctl(SQ_WHEEL, v);
-    else if (cc == 64)
-        seq_ctl(SQ_SUSTAIN, v);
-    else if (cc == 120 || cc == 123) {
-        eng_all_off();
-        seq_panic();
-    }
-}
-void masque_bend_isr(int v14) { seq_ctl(SQ_BEND, v14); }
+void masque_midi_isr(int status, int d1, int d2) { mpe_midi(status, d1, d2); }
 void masque_clock_isr(int what) { seq_clock(what); }
 
 /* the sequencer's notes come here with their raw velocity; this is where the curve applies */
@@ -1071,11 +1304,10 @@ static void events(void)
         __asm__ volatile("" ::: "memory");
         q_r++;
         switch (e.t) {
-        case EV_ON: masque_note_on_isr(e.a, e.b); break;
-        case EV_OFF: masque_note_off_isr(e.a); break;
-        case EV_PRESS: masque_pressure_isr(e.a, e.b); break;
-        case EV_CC: masque_cc_isr(e.a, e.b); break;
-        case EV_BEND: masque_bend_isr(e.a | e.b << 7); break;
+        case EV_ON: seq_note_on(e.a, e.b, CH_LOCAL); break;
+        case EV_OFF: seq_note_off(e.a, 64, CH_LOCAL); break;
+        case EV_PRESS: eng_poly_pressure(e.a, CH_LOCAL, e.b); break;
+        case EV_MIDI: mpe_midi(e.a | (G.midi >= 1 && G.midi <= 16 ? G.midi - 1 : 0), e.b, e.c); break;
         case EV_LREC: seq_loop_rec(); break;
         case EV_LPLAY: seq_loop_play(); break;
         case EV_LCLEAR: seq_loop_clear(); break;
@@ -1138,10 +1370,8 @@ static void fx_mods(fx_ctl_t *c)           /* the effects' type and balance, aft
         if (P.lfo[i].dest == LD_FX2TYP) t2 += x * 8.0f;
         if (P.lfo[i].dest == LD_FX2BAL) b2 += x * 0.5f;
     }
-    if (P.wheel.dest == MD_FX1BAL) b1 += (float)P.wheel.amt / 99.0f * S.wheel;
-    if (P.wheel.dest == MD_FX2BAL) b2 += (float)P.wheel.amt / 99.0f * S.wheel;
-    if (P.at.dest == MD_FX1BAL) b1 += (float)P.at.amt / 99.0f * S.at_all;
-    if (P.at.dest == MD_FX2BAL) b2 += (float)P.at.amt / 99.0f * S.at_all;
+    b1 += S.gx[XD_FX1BAL];
+    b2 += S.gx[XD_FX2BAL];
     c->b1 = fm_clampf(b1, 0.0f, 1.0f);
     c->b2 = fm_clampf(b2, 0.0f, 1.0f);
     c->t1 = P.fx.t1;
@@ -1164,8 +1394,14 @@ void masque_render(float *l, float *r, uint32_t n)
     if (n > MQ_BLOCK_MAX)
         n = MQ_BLOCK_MAX;
     if (g_new) {
+        int midi_was = G.midi;
         g_new = 0;
         G = gbuf;
+        tuning_set(&G);
+        if (G.midi != midi_was) {
+            eng_all_off();
+            mpe_set_mode(G.midi);
+        }
         if (G.voices < 4 || G.voices > MQ_MAX_VOICES)
             G.voices = MQ_DEFAULT_VOICES;
         if (S.allowed > G.voices || !S.shed_hold)
@@ -1209,11 +1445,7 @@ void masque_render(float *l, float *r, uint32_t n)
         }
     }
     /* the controllers glide; the LFOs for the block */
-    S.bend += (S.bend_to - S.bend) * 0.5f;
-    S.at_all = S.chat;
-    for (i = 0; i < MQ_MAX_VOICES; i++)
-        if (V[i].used && V[i].gate && V[i].at > S.at_all)
-            S.at_all = V[i].at;
+    x_part();
     lfo_block((n + CR - 1) / CR);
     if (para_mode()) {                     /* the shared envelopes run once for every voice, a block ahead */
         uint32_t st, e;
@@ -1299,6 +1531,18 @@ void masque_render(float *l, float *r, uint32_t n)
             meter.sounding[i] = snd[i];
         meter.cpu2 = (uint8_t)use2;
         seq_meter(&meter);
+        mpe_meter(&meter);
+        {   /* the last note's expression, for the MATRIX page */
+            const voice_t *v = &V[S.last_voice];
+            int has, h = 0;
+            meter.x_vel = v->vel;
+            meter.x_press = src_val(v, XS_PRESS, 0, &has); h |= has;
+            meter.x_at = src_val(v, XS_AT, 0, &has); h |= has << 1;
+            meter.x_timbre = src_val(v, XS_TIMBRE, 0, &has); h |= has << 2;
+            meter.x_bend = src_val(v, XS_BEND, 0, &has); h |= (meter.x_bend != 0.0f) << 3;
+            meter.x_has = (uint8_t)h;
+            meter.x_ch = (int8_t)(v->ch < 16 ? v->ch : -1);
+        }
     }
     if (S.held <= 0 && !any_gate())
         S.lenv_t = 0.0f;                   /* the LFOs' delay starts again with the next key */
@@ -1331,7 +1575,10 @@ void masque_init(void)
         V[i].o[0].tab.m = V[i].o[1].tab.m = 0xFFFFFFFFu;
         V[i].rng = 0xA5A5u + (uint32_t)i * 7919u;
     }
-    S.bend = S.bend_to = 0.0f;
+    for (i = 0; i < 16; i++)
+        S.chx[i].range = 0.0f;
+    mpe_init();
+    tuning_set(&G);
     seq_init();
     fx_init();
     P.gen.vol = 80;

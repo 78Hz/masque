@@ -3,7 +3,7 @@
 ![MASQUE's screens](docs/img/screens.png)
 
 A bitmask synthesizer for the M-VAVE FM-1, after Kodamo's MASK1: two bitmask oscillators a voice, a sample-and-hold
-noise, a driven, saturating state-variable filter (LP, HP, BP, NOTCH, PEAK, and a tuned comb), four loopable envelopes, mask and pitch delta envelopes, two LFOs, the
+noise, a driven, saturating state-variable filter (LP, HP, BP, NOTCH, PEAK, and a tuned comb), four loopable envelopes, mask and pitch delta envelopes, two LFOs, an eight-row modulation matrix in each sound, MPE, KIST's tunings, the
 MASK1's nine play modes with slur detection, an arpeggiator, a looper and two effects. Ten voices (up to twelve),
 forty factory sounds, 128 of your own.
 
@@ -58,8 +58,9 @@ its values in rows of four (K1..K4) and SELECT walks the rows. **The user manual
 | SEL | OSC 1 → OSC 2 → NOISE → FILTER |
 | ENV | the envelope of the section shown (L A D S R LOOP), as the MASK1's Env button |
 | LFO | LFO 1 ↔ LFO 2 |
-| EDIT | PITCH → MOD → GENERAL |
-| FX, ARP, SEQ, GLO | the effects, the arpeggiator (ARP on its page: HOLD), the looper, the part's settings |
+| EDIT | PITCH → MATRIX → GENERAL |
+| FX, ARP, SEQ | the effects, the arpeggiator (ARP on its page: HOLD), the looper |
+| GLO | the part's settings (GLOBAL: MIDI, MPE, USB host); again: TUNING |
 | REC, PLAY | the looper: REC waits for the first note and records; REC or PLAY again plays it; PLAY stops |
 | SAVE | the WRITE page; SAVE again does its K4: WRITE (into a user slot), INIT, REVERT, SETUP (for power-on) |
 | SELECT | every row of every page in turn |
@@ -67,6 +68,20 @@ its values in rows of four (K1..K4) and SELECT walks the rows. **The user manual
 | PRESETS | the sounds: P00..P39, then U000..U127; it loads when the knob rests |
 | OCT- / OCT+ | the FM-1's keys; both: back to 0 |
 | MASTER | volume |
+
+**The matrix**: eight rows in each sound, a source (velocity, release velocity, MPE pressure, aftertouch, timbre,
+the note's bend, the wheel, the key, the LFOs, the filter envelope, a random value per note, any CC) through a range,
+a curve and some smoothing to a destination (pitch, masks, the mask envelopes' speed, levels, the noise, cutoff,
+resonance, DRIVE, the envelopes' depth and times, pan, the LFOs, the effects). Pressure scanning the masks and their
+sub-masks is what it was made for. Its design is OPUS XIV's ([pipe](https://github.com/78Hz/pipe)).
+
+**MPE**, as MMA/AMEI RP-053 has it, after OPUS XIV's MPE input: zones, the configuration message, Member and Master
+Channels, bend sensitivity, MPE+. For the Osmose: DIN into the TRS jack, or USB through a powered hub with the
+FM-1's USB port as a MIDI host.
+
+**Tunings**, KIST's: A from 300.00 to 500.99 Hz, any equal division from 5 to 72 steps to the octave, Werckmeister
+III, 1/4-comma meantone, Kirnberger III and Vallotti on any root. Keys, SEMI, the octave and the arpeggiator count in
+the tuning's steps.
 
 The FM-1's keys play with velocity, and their pressure is each voice's aftertouch (poly). MIDI comes in over USB
 and the TRS jack: notes, velocity, poly and channel aftertouch, pitch bend, the mod wheel (CC 1), sustain (CC 64),
@@ -119,6 +134,7 @@ A tag `vX.Y`, or running the Build workflow by hand with a version, builds every
 ## What is not the MASK1's
 
 - One part. The MASK1's multitimbral parts, layers and splits are not here.
+- More than the MASK1: a modulation matrix instead of its three routings, MPE, and tunings.
 - The FM-1 has no wheels: pitch bend and the mod wheel come over MIDI. Its keys' pressure is aftertouch.
 - The factory sounds are MASQUE's own (forty of them), not Kodamo's.
 - The effects are the MASK1's families and numbering (CH, DT, BC, RM; DL, RV, DT), each sixteen of MASQUE's own;

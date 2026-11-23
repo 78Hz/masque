@@ -17,18 +17,19 @@
 #include "masque.h"
 #include "presets.h"
 
-#define SET_MAGIC 0x3151534Du            /* "MSQ1" */
+#define SET_MAGIC 0x3251534Du            /* "MSQ2" */
 #define SET_VERSION 1u
 #define NUSER 128
-#define BANK_N 32
+#define BANK_N 24                        /* sounds a store object holds (3840 bytes) */
+#define NBANKS 6
 #define NPROG (PRESET_COUNT + NUSER)     /* P00..P39, U000..U127 */
 
 typedef struct {
     uint32_t magic;
     uint16_t version, size;
     mq_global_t glob;
-    uint8_t midi_ch;                     /* 0 omni, 1..16 */
-    int8_t octave;                       /* the FM-1's keys: -3..+3 */
+    uint8_t usb_host;                    /* the USB port plays host to a MIDI controller (a powered hub) */
+    int8_t octave;                       /* the FM-1's keys: -3..+3 octaves of the tuning */
     uint16_t prog;                       /* the sound last chosen */
     mq_patch_t edit;                     /* the sound as it was left, edits and all */
 } settings_t;
@@ -39,8 +40,8 @@ typedef struct {
     uint16_t version, count;
     mq_patch_t p[BANK_N];
 } bank_t;
-#define BANK_MAGIC 0x4B42514Du           /* "MQBK" */
-static bank_t banks[4];
+#define BANK_MAGIC 0x324B514Du           /* "MQK2" */
+static bank_t banks[NBANKS];
 
 static mq_patch_t cur;                   /* the sound being played and edited */
 static mq_patch_t loaded;                /* as it was loaded: SAVE lights while they differ */
@@ -50,6 +51,7 @@ static uint8_t backup_hold;
 static volatile uint32_t midi_count;
 static volatile int pc_req = -1;         /* a program change came in: the main loop loads it */
 static int cc_mapped(uint32_t cc);
+static int part_channel(uint32_t ch);
 #define CCQ 64u
 static volatile uint16_t ccq[CCQ];       /* the sound's CCs (the map below), for the main loop: cc << 8 | value */
 static volatile uint32_t ccq_w, ccq_r;
@@ -65,27 +67,22 @@ static void midi_in(void)                /* audio interrupt: what came in over U
         }
         if (st < 0x80u || st >= 0xF0u)
             continue;
-        if (set.midi_ch && ch != (uint32_t)(set.midi_ch - 1u))
-            continue;
         midi_count++;
-        switch (st & 0xF0u) {
-        case 0x90u: masque_note_on_isr((int)d1, (int)d2); break;
-        case 0x80u: masque_note_off_isr((int)d1); break;
-        case 0xA0u: masque_pressure_isr((int)d1, (int)d2); break;
-        case 0xB0u:
-            if (cc_mapped(d1)) {         /* a value of the sound: the main loop's, as a knob's */
-                if (ccq_w - ccq_r < CCQ)
-                    ccq[ccq_w++ % CCQ] = (uint16_t)(d1 << 8 | d2);
-            } else {
-                masque_cc_isr((int)d1, (int)d2);
-            }
-            break;
-        case 0xD0u: masque_chan_pressure_isr((int)d1); break;
-        case 0xE0u: masque_bend_isr((int)(d1 | d2 << 7)); break;
-        case 0xC0u: pc_req = (int)d1; break;   /* 0..39 the factory sounds, 40..127 the first user sounds */
-        default: break;
+        if ((st & 0xF0u) == 0xC0u) {      /* 0..39 the factory sounds, 40..127 the first user sounds */
+            if (part_channel(ch))
+                pc_req = (int)d1;
+            continue;
         }
+        /* a CC of the map: a value of the sound, the main loop's as a knob's (on the part's channel; in MPE on a Master
+         * Channel or one in no zone, and never CC74, which is MPE's timbre there). Every message still goes to the
+         * engine (its MIDI and MPE: dsp/mpe.c), the CCs for the matrix's CC sources too */
+        if ((st & 0xF0u) == 0xB0u && cc_mapped(d1) && part_channel(ch) &&
+            !(set.glob.midi == MQ_MIDI_MPE && d1 == 74u) && ccq_w - ccq_r < CCQ)
+            ccq[ccq_w++ % CCQ] = (uint16_t)(d1 << 8 | d2);
+        masque_midi_isr((int)st, (int)d1, (int)d2);
     }
+    if (plat_usb_lost())                 /* a USB device (the host's) gone: what it held lets go */
+        masque_midi_isr(0xB0 | (set.glob.midi >= 1 && set.glob.midi <= 16 ? set.glob.midi - 1 : 0), 123, 0);
 }
 
 static float out_l[APP_BLOCK], out_r[APP_BLOCK];
@@ -142,14 +139,14 @@ static void load_prog(int prog)
 {
     set.prog = (uint16_t)prog;
     prog_patch(prog, &cur);
+    sound_changed();                     /* (kept in range first: as loaded is as it plays) */
     loaded = cur;
-    sound_changed();
 }
 
 static void banks_load(void)
 {
     int b;
-    for (b = 0; b < 4; b++) {
+    for (b = 0; b < NBANKS; b++) {
         if (plat_store_load(OBJ_BANK0 + (uint32_t)b, &banks[b], sizeof banks[b]) != (int)sizeof banks[b] ||
             banks[b].magic != BANK_MAGIC || banks[b].count != BANK_N) {
             memset(&banks[b], 0, sizeof banks[b]);
@@ -167,7 +164,10 @@ static void settings_defaults(void)
     set.magic = SET_MAGIC;
     set.version = SET_VERSION;
     set.size = sizeof set;
-    set.glob.a_hz10 = 4400;
+    set.glob.a_hz100 = 44000;
+    set.glob.system = TS_EQUAL;
+    set.glob.edo = 12;
+    set.glob.midi = 0;
     set.glob.vel_curve = 2;
     set.glob.at_curve = 2;
     set.glob.voices = MQ_DEFAULT_VOICES;
@@ -178,8 +178,10 @@ static void settings_defaults(void)
 static int settings_ok(void)
 {
     return set.magic == SET_MAGIC && set.version == SET_VERSION && set.size == sizeof set &&
-           set.glob.a_hz10 >= 4000 && set.glob.a_hz10 <= 4700 && set.glob.vel_curve <= 6 && set.glob.at_curve <= 5 &&
-           set.glob.voices >= 4 && set.glob.voices <= MQ_MAX_VOICES && set.midi_ch <= 16 && set.octave >= -3 &&
+           set.glob.a_hz100 >= 30000 && set.glob.a_hz100 <= 50099 && set.glob.system < NTS && set.glob.edo >= 5 &&
+           set.glob.edo <= 72 && set.glob.root < 12 && set.glob.vel_curve <= 6 && set.glob.at_curve <= 5 &&
+           set.glob.midi <= MQ_MIDI_MPE && set.usb_host <= 1 &&
+           set.glob.voices >= 4 && set.glob.voices <= MQ_MAX_VOICES && set.octave >= -3 &&
            set.octave <= 3 && set.prog < NPROG;
 }
 
@@ -194,6 +196,8 @@ void app_init(void)
     cur = set.edit;                      /* the sound as it was left */
     sound_changed();
     plat_cpu2_set(1);                    /* half the voices, where the unit allows */
+    if (set.usb_host)
+        plat_usb_host(1);
 }
 
 /* ------------------------------------------------------------------------------------------- text --- */
@@ -282,10 +286,11 @@ typedef struct {
                      {0, K_NONE, 0, 0, 0, 0}}}
 #define NONE {0, K_NONE, 0, 0, 0, 0}
 
-enum { SEC_HOME, SEC_OSC1, SEC_OSC2, SEC_NOISE, SEC_FILTER, SEC_PITCH, SEC_LFO1, SEC_LFO2, SEC_MOD, SEC_GENERAL,
-       SEC_FX, SEC_ARP, SEC_LOOPER, SEC_GLOBAL, SEC_WRITE, NSEC };
+enum { SEC_HOME, SEC_OSC1, SEC_OSC2, SEC_NOISE, SEC_FILTER, SEC_PITCH, SEC_LFO1, SEC_LFO2, SEC_MATRIX, SEC_GENERAL,
+       SEC_FX, SEC_ARP, SEC_LOOPER, SEC_GLOBAL, SEC_TUNING, SEC_WRITE, NSEC };
 static const char *const SEC_NAME[NSEC] = {"HOME", "OSC 1", "OSC 2", "NOISE", "FILTER", "PITCH", "LFO 1", "LFO 2",
-                                          "MOD", "GENERAL", "FX", "ARP", "LOOPER", "GLOBAL", "WRITE"};
+                                          "MATRIX", "GENERAL", "FX", "ARP", "LOOPER", "GLOBAL", "TUNING",
+                                          "WRITE"};
 
 /* the rows: [section][row][knob]; the envelope rows separately */
 #define MAXROWS 2
@@ -317,12 +322,6 @@ static const pdesc_t ROWS[NSEC][MAXROWS][4] = {
                    {"DEST", K_NAMES, NAME_LDEST, 0, NLDESTS - 1, PO(lfo[1].dest)},
                    {"WAVE", K_NAMES, NAME_LWAVE, 0, NLWAVES - 1, PO(lfo[1].wave)}},
                   {{"DLAY", K_U8, 0, 0, 99, PO(lfo[1].dlay)}, {"DCAY", K_U8, 0, 0, 99, PO(lfo[1].dcay)}, NONE, NONE}},
-    [SEC_MOD] = {{{"V-DEST", K_NAMES, NAME_VDEST, 0, NVDESTS - 1, PO(vel.dest)},
-                  {"V-AMT", K_S8, 0, -99, 99, PO(vel.amt)},
-                  {"M-DEST", K_NAMES, NAME_MDEST, 0, NMDESTS - 1, PO(wheel.dest)},
-                  {"M-AMT", K_S8, 0, -99, 99, PO(wheel.amt)}},
-                 {{"AT-DEST", K_NAMES, NAME_MDEST, 0, NMDESTS - 1, PO(at.dest)},
-                  {"AT-AMT", K_S8, 0, -99, 99, PO(at.amt)}, NONE, NONE}},
     [SEC_GENERAL] = {{{"MODE", K_NAMES, NAME_PMODE, 0, NPMODES - 1, PO(gen.mode)},
                       {"VOL", K_U8, 0, 0, 99, PO(gen.vol)}, {"SEMI", K_S8, 0, -24, 24, PO(gen.semi)},
                       {"PORT", K_U8, 0, 0, 13, PO(gen.port)}},
@@ -334,11 +333,15 @@ static const pdesc_t ROWS[NSEC][MAXROWS][4] = {
                   {"HOLD", K_U8, NAME_LOOP, 0, 1, PO(arp.hold)}, {"TRIG", K_U8, NAME_LOOP, 0, 1, PO(arp.trig)}}},
 };
 /* the GLOBAL page's and the WRITE page's are the app's own */
-enum { G_MIDICH, G_TUNE, G_VCURVE, G_ATCURVE, G_VOICES, G_OCTAVE };
+enum { G_MIDI, G_VCURVE, G_ATCURVE, G_VOICES, G_OCTAVE, G_USB, G_AHZ, G_ACENT, G_SYS, G_ROOT, G_EDO };
 static const pdesc_t GROWS[2][4] = {
-    {{"MIDI CH", K_GLOB, G_MIDICH, 0, 16, 0}, {"A HZ", K_GLOB, G_TUNE, 4000, 4700, 0},
-     {"VEL CRV", K_GLOB, G_VCURVE, 0, 6, 0}, {"AT CRV", K_GLOB, G_ATCURVE, 0, 5, 0}},
-    {{"VOICES", K_GLOB, G_VOICES, 4, MQ_MAX_VOICES, 0}, {"OCTAVE", K_GLOB, G_OCTAVE, -3, 3, 0}, NONE, NONE}};
+    {{"MIDI", K_GLOB, G_MIDI, 0, MQ_MIDI_MPE, 0}, {"VEL CRV", K_GLOB, G_VCURVE, 0, 6, 0},
+     {"AT CRV", K_GLOB, G_ATCURVE, 0, 5, 0}, {"VOICES", K_GLOB, G_VOICES, 4, MQ_MAX_VOICES, 0}},
+    {{"OCTAVE", K_GLOB, G_OCTAVE, -3, 3, 0}, {"USB", K_GLOB, G_USB, 0, 1, 0}, NONE, NONE}};
+/* the TUNING page: A in whole hertz and hundredths, the system, its root (or its steps to the octave) */
+static const pdesc_t TROW[4] = {{"A HZ", K_GLOB, G_AHZ, 300, 500, 0}, {"1/100", K_GLOB, G_ACENT, 0, 99, 0},
+                                {"SYSTEM", K_GLOB, G_SYS, 0, NTS - 1, 0}, {"ROOT", K_GLOB, G_ROOT, 0, 11, 0}};
+static const pdesc_t TROW_EDO = {"STEPS", K_GLOB, G_EDO, 5, 72, 0};
 static const pdesc_t ENVROWS[4][2][4] = {ENV_ROWS(osc[0].env), ENV_ROWS(osc[1].env), ENV_ROWS(noise.env),
                                          ENV_ROWS(filt.env)};
 static const char *const ACTIONS[4] = {"WRITE", "INIT", "REVERT", "SETUP"};
@@ -387,9 +390,10 @@ static const ccmap_t CCMAP[] = {
     C(110, "L2 DEST", K_NAMES, NAME_LDEST, 0, NLDESTS - 1, lfo[1].dest),
     C(111, "L2 WAVE", K_NAMES, NAME_LWAVE, 0, NLWAVES - 1, lfo[1].wave),
     C(112, "L2 DLAY", K_U8, 0, 0, 99, lfo[1].dlay), C(113, "L2 DCAY", K_U8, 0, 0, 99, lfo[1].dcay),
-    C(102, "V-DEST", K_NAMES, NAME_VDEST, 0, NVDESTS - 1, vel.dest), C(103, "V-AMT", K_S8, 0, -99, 99, vel.amt),
-    C(104, "M-DEST", K_NAMES, NAME_MDEST, 0, NMDESTS - 1, wheel.dest), C(105, "M-AMT", K_S8, 0, -99, 99, wheel.amt),
-    C(106, "AT-DEST", K_NAMES, NAME_MDEST, 0, NMDESTS - 1, at.dest), C(107, "AT-AMT", K_S8, 0, -99, 99, at.amt),
+    C(102, "X1 AMT", K_S8, 0, -99, 99, mtx[0].amt), C(103, "X2 AMT", K_S8, 0, -99, 99, mtx[1].amt),
+    C(104, "X3 AMT", K_S8, 0, -99, 99, mtx[2].amt), C(105, "X4 AMT", K_S8, 0, -99, 99, mtx[3].amt),
+    C(106, "X5 AMT", K_S8, 0, -99, 99, mtx[4].amt), C(107, "X6 AMT", K_S8, 0, -99, 99, mtx[5].amt),
+    C(117, "X7 AMT", K_S8, 0, -99, 99, mtx[6].amt), C(118, "X8 AMT", K_S8, 0, -99, 99, mtx[7].amt),
     C(3, "MODE", K_NAMES, NAME_PMODE, 0, NPMODES - 1, gen.mode), C(7, "VOL", K_U8, 0, 0, 99, gen.vol),
     C(12, "SEMI", K_S8, 0, -24, 24, gen.semi), C(5, "PORT", K_U8, 0, 0, 13, gen.port),
     C(8, "PANS", K_U8, 0, 0, 99, gen.pans), C(9, "RATE", K_U8, 0, 0, 99, gen.rate),
@@ -401,6 +405,19 @@ static const ccmap_t CCMAP[] = {
 };
 #undef C
 #define NCCMAP ((int)(sizeof CCMAP / sizeof CCMAP[0]))
+
+/* the part's own channel, for program changes and the CC map: any in OMNI, its one, or in MPE a Master Channel or
+ * one in no zone (the Members carry the notes' own expression) */
+static int part_channel(uint32_t ch)
+{
+    const mq_meter_t *m = masque_meter();
+    int lo = m->mpe_lower, up = m->mpe_upper, c = (int)ch;
+    if (set.glob.midi >= 1 && set.glob.midi <= 16)
+        return c == set.glob.midi - 1;
+    if (set.glob.midi == MQ_MIDI_MPE)
+        return !((lo > 0 && c >= 1 && c <= lo) || (up > 0 && c >= 15 - up && c <= 14));
+    return 1;
+}
 
 static int cc_mapped(uint32_t cc)            /* (the render's, from MIDI in) */
 {
@@ -457,8 +474,10 @@ void app_say(const char *a, const char *b)
 
 static int sec_rows(int s)
 {
-    if (s == SEC_GLOBAL || s == SEC_WRITE)
+    if (s == SEC_GLOBAL || s == SEC_WRITE || s == SEC_TUNING)
         return s == SEC_GLOBAL ? 2 : 1;
+    if (s == SEC_MATRIX)
+        return 2 * MQ_MTX_ROWS;           /* each row of the matrix two rows of knobs */
     if (s == SEC_LOOPER)
         return 1;
     if (ui.env && s >= SEC_OSC1 && s <= SEC_FILTER)
@@ -472,6 +491,28 @@ static const pdesc_t *row_desc(int s, int r)
     static pdesc_t wr[4];
     if (s == SEC_GLOBAL)
         return GROWS[r];
+    if (s == SEC_TUNING) {
+        static pdesc_t t[4];
+        t[0] = TROW[0]; t[1] = TROW[1]; t[2] = TROW[2];
+        t[3] = set.glob.system == TS_EQUAL ? TROW_EDO : TROW[3];
+        return t;
+    }
+    if (s == SEC_MATRIX) {               /* matrix row r / 2: SRC DEST AMT CURVE, then LO HI SMOOTH ZONE */
+        static pdesc_t x[4];
+        uint16_t o = (uint16_t)(PO(mtx) + (r / 2) * sizeof cur.mtx[0]);
+        if (!(r & 1)) {
+            x[0] = (pdesc_t){"SRC", K_NAMES, NAME_XSRC, 0, NXSRC - 1, (uint16_t)(o + 0)};
+            x[1] = (pdesc_t){"DEST", K_NAMES, NAME_XDEST, 0, NXDEST - 1, (uint16_t)(o + 1)};
+            x[2] = (pdesc_t){"AMT", K_S8, 0, -99, 99, (uint16_t)(o + 2)};
+            x[3] = (pdesc_t){"CURVE", K_NAMES, NAME_XCURVE, 0, NXCURVE - 1, (uint16_t)(o + 3)};
+        } else {
+            x[0] = (pdesc_t){"LO", K_U8, 0, 0, 99, (uint16_t)(o + 4)};
+            x[1] = (pdesc_t){"HI", K_U8, 0, 1, 100, (uint16_t)(o + 5)};
+            x[2] = (pdesc_t){"SMOOTH", K_U8, 0, 0, 99, (uint16_t)(o + 6)};
+            x[3] = (pdesc_t){"ZONE", K_NAMES, NAME_XZONE, 0, NXZONE - 1, (uint16_t)(o + 7)};
+        }
+        return x;
+    }
     if (s == SEC_WRITE) {
         wr[0] = (pdesc_t){"SLOT", K_NONE, 0, 0, 0, 0};
         wr[1] = (pdesc_t){"CURSOR", K_NONE, 0, 0, 0, 0};
@@ -489,8 +530,13 @@ static const pdesc_t *row_desc(int s, int r)
 static int glob_get(int g)
 {
     switch (g) {
-    case G_MIDICH: return set.midi_ch;
-    case G_TUNE: return set.glob.a_hz10;
+    case G_MIDI: return set.glob.midi;
+    case G_USB: return set.usb_host;
+    case G_AHZ: return set.glob.a_hz100 / 100;
+    case G_ACENT: return set.glob.a_hz100 % 100;
+    case G_SYS: return set.glob.system;
+    case G_ROOT: return set.glob.root;
+    case G_EDO: return set.glob.edo;
     case G_VCURVE: return set.glob.vel_curve;
     case G_ATCURVE: return set.glob.at_curve;
     case G_VOICES: return set.glob.voices;
@@ -500,8 +546,16 @@ static int glob_get(int g)
 static void glob_set(int g, int v)
 {
     switch (g) {
-    case G_MIDICH: set.midi_ch = (uint8_t)v; break;
-    case G_TUNE: set.glob.a_hz10 = (uint16_t)v; break;
+    case G_MIDI: set.glob.midi = (uint8_t)v; break;
+    case G_USB:
+        set.usb_host = (uint8_t)v;
+        plat_usb_host(v);
+        break;
+    case G_AHZ: set.glob.a_hz100 = (uint16_t)(v * 100 + set.glob.a_hz100 % 100); break;
+    case G_ACENT: set.glob.a_hz100 = (uint16_t)(set.glob.a_hz100 / 100 * 100 + v); break;
+    case G_SYS: set.glob.system = (uint8_t)v; break;
+    case G_ROOT: set.glob.root = (uint8_t)v; break;
+    case G_EDO: set.glob.edo = (uint8_t)v; break;
     case G_VCURVE: set.glob.vel_curve = (uint8_t)v; break;
     case G_ATCURVE: set.glob.at_curve = (uint8_t)v; break;
     case G_VOICES: set.glob.voices = (uint8_t)v; break;
@@ -569,7 +623,7 @@ static void cc_apply(uint32_t cc, int v)     /* main loop: a CC of the map came 
 /* a value turned on the panel goes out as its CC (USB), so a computer can record it */
 static void cc_send_value(const pdesc_t *d)
 {
-    uint32_t ch = set.midi_ch ? set.midi_ch - 1u : 0u;
+    uint32_t ch = set.glob.midi >= 1 && set.glob.midi <= 16 ? set.glob.midi - 1u : 0u;
     int i;
     for (i = 0; i < NCCMAP; i++) {
         const pdesc_t *m = &CCMAP[i].d;
@@ -616,6 +670,18 @@ static void patch_clamp(mq_patch_t *p)
                     }
                 }
             }
+    for (r = 0; r < 2 * MQ_MTX_ROWS; r++) {   /* the matrix's rows */
+        const pdesc_t *d = row_desc(SEC_MATRIX, r);
+        for (k = 0; k < 4; k++) {
+            uint8_t *b = (uint8_t *)keep + d[k].off;
+            int v = d[k].kind == K_S8 ? *(int8_t *)b : *b;
+            if (v < d[k].lo || v > d[k].hi) {
+                v = clamp(v, d[k].lo, d[k].hi);
+                if (d[k].kind == K_S8) *(int8_t *)b = (int8_t)v;
+                else *b = (uint8_t)v;
+            }
+        }
+    }
     for (e = 0; e < 4; e++)
         for (r = 0; r < 2; r++)
             for (k = 0; k < 4; k++) {
@@ -646,16 +712,23 @@ static void value_text(const pdesc_t *d, int v, char *t)
         else int_text(v, t);
         break;
     case K_GLOB:
-        if (d->names == G_MIDICH) {
-            if (v) int_text(v, t);
-            else text_cat(t, "OMNI");
-        } else if (d->names == G_TUNE) {
-            char u[4];
-            int_text(v / 10, t);
-            text_cat(t, ".");
-            u[0] = (char)('0' + v % 10);
-            u[1] = 0;
-            text_cat(t, u);
+        if (d->names == G_MIDI) {
+            text_cat(t, masque_name_of(NAME_MIDI, v));
+        } else if (d->names == G_USB) {
+            text_cat(t, v ? "HOST" : "DEVICE");
+        } else if (d->names == G_ACENT) {
+            t[0] = '.';
+            t[1] = (char)('0' + v / 10);
+            t[2] = (char)('0' + v % 10);
+            t[3] = 0;
+        } else if (d->names == G_SYS) {
+            text_cat(t, masque_name_of(NAME_TS, v));
+        } else if (d->names == G_ROOT) {
+            static const char *const PC[12] = {"C", "C#", "D", "Eb", "E", "F", "F#", "G", "G#", "A", "Bb", "B"};
+            text_cat(t, PC[v % 12]);
+        } else if (d->names == G_EDO) {
+            int_text(v, t);
+            text_cat(t, "-EDO");
         } else if (d->names == G_VCURVE) {
             text_cat(t, masque_name_of(NAME_VCURVE, v));
         } else if (d->names == G_ATCURVE) {
@@ -780,9 +853,17 @@ static void knob(int k, int32_t e)
     }
 }
 
-/* ALGORITHM: the mask of the oscillator shown */
+/* ALGORITHM: the mask of the oscillator shown; on the MATRIX page the matrix's row */
 static void mask_turn(int32_t e)
 {
+    if (ui.sec == SEC_MATRIX) {
+        char t[8];
+        int r = (ui.row / 2 + (int)e % MQ_MTX_ROWS + MQ_MTX_ROWS) % MQ_MTX_ROWS;
+        go(SEC_MATRIX, 2 * r, 0);
+        int_text(r + 1, t);
+        app_say("ROW", t);
+        return;
+    }
     int o = ui.sec == SEC_OSC2 ? 1 : ui.sec == SEC_OSC1 ? 0 : ui.last_osc;
     char t[12];
     if (e > 2 || e < -2)
@@ -840,7 +921,12 @@ static void do_write(void)
         app_say("NOT SAVED", r == -9 ? "flash unknown" : "store full");
 }
 
-static int fm1_note(uint32_t k) { return 53 + (int)k + 12 * set.octave; }   /* key 0 is F3 */
+static int steps_octave(void) { return set.glob.system == TS_EQUAL ? set.glob.edo : 12; }
+static int fm1_note(uint32_t k)            /* key 0 is F3 (53); each key a step of the tuning, OCT- / OCT+ its octave */
+{
+    int n = 53 + (int)k + steps_octave() * set.octave;
+    return n < 0 ? 0 : n > 127 ? 127 : n;
+}
 
 static void octave_set(int o)
 {
@@ -875,9 +961,9 @@ static void button(uint32_t k, uint32_t btn)
     case B_LFO: go(ui.sec == SEC_LFO1 ? SEC_LFO2 : ui.sec == SEC_LFO2 ? SEC_LFO1 : SEC_LFO1 + ui.edit_lfo, 0, 1);
         ui.edit_lfo = ui.sec - SEC_LFO1;
         break;
-    case B_EDIT: go(ui.sec == SEC_PITCH ? SEC_MOD : ui.sec == SEC_MOD ? SEC_GENERAL : SEC_PITCH, 0, 1); break;
+    case B_EDIT: go(ui.sec == SEC_PITCH ? SEC_MATRIX : ui.sec == SEC_MATRIX ? SEC_GENERAL : SEC_PITCH, 0, 1); break;
     case B_FX: go(SEC_FX, 0, 1); break;
-    case B_GLO: go(SEC_GLOBAL, 0, 1); break;
+    case B_GLO: go(ui.sec == SEC_GLOBAL ? SEC_TUNING : SEC_GLOBAL, 0, 1); break;
     case B_ARP:
         if (ui.sec == SEC_ARP) {         /* on the ARP page: ARP latches (HOLD) */
             cur.arp.hold = !cur.arp.hold;
@@ -987,9 +1073,9 @@ static void input(void)
         if (s >= SEC_OSC1 && s <= SEC_FILTER) lit |= 1u << B_SEL;
         if (ui.env) lit |= 1u << B_ENV;
         if (s == SEC_LFO1 || s == SEC_LFO2) lit |= 1u << B_LFO;
-        if (s == SEC_PITCH || s == SEC_MOD || s == SEC_GENERAL) lit |= 1u << B_EDIT;
+        if (s == SEC_PITCH || s == SEC_MATRIX || s == SEC_GENERAL) lit |= 1u << B_EDIT;
         if (s == SEC_FX) lit |= 1u << B_FX;
-        if (s == SEC_GLOBAL) lit |= 1u << B_GLO;
+        if (s == SEC_GLOBAL || s == SEC_TUNING) lit |= 1u << B_GLO;
         if (s == SEC_HOME) lit |= 1u << B_HOME;
         if (s == SEC_LOOPER) lit |= 1u << B_SEQ;
         if (m->arp_on || s == SEC_ARP) lit |= 1u << B_ARP;
@@ -1198,6 +1284,12 @@ static void draw_header(void)
         text_cat(t, SEC_NAME[ui.sec]);
         if (ui.env && ui.sec >= SEC_OSC1 && ui.sec <= SEC_FILTER)
             text_cat(t, " ENV");
+        if (ui.sec == SEC_MATRIX) {
+            char u[4];
+            text_cat(t, "  ROW ");
+            int_text(ui.row / 2 + 1, u);
+            text_cat(t, u);
+        }
         x = cv_text(8, 28, &FONT_B, t, C_LBL);
         (void)x;
         if (m->loop_state == LS_RECORDING || m->loop_state == LS_ARMED)
@@ -1315,6 +1407,99 @@ static void draw_visual(void)
         }
         break;
     }
+    case SEC_MATRIX: {
+        int r;
+        for (r = 0; r < MQ_MTX_ROWS; r++) {   /* the eight rows: SRC > DEST AMT, the one being edited lit */
+            char u[8];
+            int32_t x = 6 + (r / 4) * 118, y = 48 + (r % 4) * 13;
+            int on = cur.mtx[r].src && cur.mtx[r].dest && cur.mtx[r].amt, sel = r == ui.row / 2;
+            t[0] = (char)('1' + r);
+            t[1] = ' ';
+            t[2] = 0;
+            if (on) {
+                text_cat(t, masque_name_of(NAME_XSRC, cur.mtx[r].src));
+                text_cat(t, ">");
+                text_cat(t, masque_name_of(NAME_XDEST, cur.mtx[r].dest));
+                text_cat(t, " ");
+                signed_text(cur.mtx[r].amt, u);
+                text_cat(t, u);
+            } else {
+                text_cat(t, "-");
+            }
+            if (sel)
+                cv_rect(x - 3, y, 116, 13, C_HL);
+            cv_text(x, y, &FONT_T, t, sel ? C_RED : on ? C_REDD : C_DIMT);
+        }
+        {   /* the last note's expression, live: V P A T B (a source not sent yet stays dark) */
+            static const char *const LB[5] = {"VEL", "PRESS", "AT", "TIMBRE", "BEND"};
+            float val[5] = {m->x_vel, m->x_press, m->x_at, m->x_timbre, 0.5f + 0.5f * m->x_bend};
+            int has[5] = {1, m->x_has & 1, (m->x_has >> 1) & 1, (m->x_has >> 2) & 1, 1}, i;
+            for (i = 0; i < 5; i++) {
+                int32_t x = 6 + i * 46, w = (int32_t)(fm_clampf(val[i], 0.0f, 1.0f) * 40.0f);
+                cv_text(x, 101, &FONT_T, LB[i], has[i] ? C_LBL : C_DIMT);
+                cv_rect(x, 114, 40, 3, C_REDDD);
+                if (has[i])
+                    cv_rect(i == 4 ? x + 20 + (w - 20 < 0 ? w - 20 : 0) : x, 114,
+                            i == 4 ? (w - 20 < 0 ? 20 - w : w - 20) : w, 3, C_RED);
+            }
+        }
+        break;
+    }
+    case SEC_TUNING: {   /* a clock face: the octave round the dial, each note where the tuning puts it */
+        int32_t cx = 60, cy = 82, rr = 32, i, n = steps_octave();
+        float cents[12];
+        masque_tuning_cents(set.glob.system, set.glob.root, cents);
+        for (i = 0; i < 64; i++) {
+            float a = FM_TWO_PI * (float)i / 64.0f;
+            cv_pset(cx + (int32_t)(fm_sinf(a) * (float)rr), cy - (int32_t)(fm_cosf(a) * (float)rr), C_REDDD);
+        }
+        for (i = 0; i < n; i++) {        /* the steps (an equal division), or the twelve (a temperament: each note's
+                                          * offset drawn five times over) */
+            float c = set.glob.system == TS_EQUAL ? (float)i / (float)n :
+                      ((float)i * 100.0f + 5.0f * (cents[i] - cents[0])) / 1200.0f;
+            float a = FM_TWO_PI * c, sx = fm_sinf(a), cy_ = fm_cosf(a);
+            int32_t r0 = set.glob.system == TS_EQUAL && n > 24 ? rr - 4 : rr - 8;
+            cv_line(cx + (int32_t)(sx * (float)r0), cy - (int32_t)(cy_ * (float)r0), cx + (int32_t)(sx * (float)rr),
+                    cy - (int32_t)(cy_ * (float)rr), i == 0 ? C_RED : C_REDD);
+        }
+        if (set.glob.system == TS_EQUAL && n != 12)
+            for (i = 0; i < 12; i++) {   /* the twelve of equal temperament, for reference */
+                float a = FM_TWO_PI * (float)i / 12.0f;
+                cv_pset(cx + (int32_t)(fm_sinf(a) * (float)(rr + 4)), cy - (int32_t)(fm_cosf(a) * (float)(rr + 4)), C_LBL);
+            }
+        {
+            char u[16];
+            int_text(set.glob.a_hz100 / 100, t);
+            text_cat(t, ".");
+            u[0] = (char)('0' + set.glob.a_hz100 % 100 / 10);
+            u[1] = (char)('0' + set.glob.a_hz100 % 10);
+            u[2] = 0;
+            text_cat(t, u);
+            cv_text(112, 52, &FONT_T, "A =", C_DIMT);
+            cv_text(112, 64, &FONT_M, t, C_RED);
+            t[0] = 0;
+            if (set.glob.system == TS_EQUAL) {
+                int_text(set.glob.edo, t);
+                text_cat(t, "-EDO");
+            } else {
+                text_cat(t, masque_name_of(NAME_TS, set.glob.system));
+            }
+            cv_text(112, 92, &FONT_XS, t, C_REDD);
+            if (set.glob.system == TS_EQUAL)
+                text_cat(u, set.glob.edo == 12 ? "equal temperament" : "steps to the octave");
+            else {
+                static const char *const PC[12] = {"C", "C#", "D", "Eb", "E", "F", "F#", "G", "G#", "A", "Bb", "B"};
+                u[0] = 0;
+                text_cat(u, "on ");
+                text_cat(u, PC[set.glob.root % 12]);
+            }
+            if (set.glob.system == TS_EQUAL)
+                cv_text(112, 106, &FONT_T, set.glob.edo == 12 ? "EQUAL TEMPERAMENT" : "STEPS TO THE OCTAVE", C_DIMT);
+            else
+                cv_text(112, 106, &FONT_T, u, C_DIMT);
+        }
+        break;
+    }
     case SEC_GLOBAL: {
         int32_t pct = (int32_t)(m->load * 100.0f + 0.5f);
         t[0] = 0;
@@ -1335,7 +1520,27 @@ static void draw_visual(void)
             text_cat(t, "  PEAK ");
             int_text((int32_t)m->voices_peak, u);
             text_cat(t, u);
-            text_c(120, 84, &FONT_S, t, C_REDD);
+            text_c(120, 80, &FONT_S, t, C_REDD);
+        }
+        {   /* MIDI: MPE's zones as they stand; the USB port */
+            char u[8];
+            t[0] = 0;
+            if (set.glob.midi == MQ_MIDI_MPE) {
+                text_cat(t, "MPE  LOWER ");
+                int_text(m->mpe_lower, u);
+                text_cat(t, u);
+                text_cat(t, "  UPPER ");
+                int_text(m->mpe_upper, u);
+                text_cat(t, u);
+            } else {
+                text_cat(t, set.glob.midi ? "MIDI ON ONE CHANNEL" : "MIDI ON EVERY CHANNEL");
+            }
+            text_c(120, 98, &FONT_XS, t, C_DIMT);
+            if (set.usb_host) {
+                int st = plat_usb_host_state();
+                text_c(120, 110, &FONT_T, st == USBH_CONNECTED ? "USB HOST: A DEVICE PLAYS" :
+                       st == USBH_LOOKING ? "USB HOST: LOOKING (A POWERED HUB)" : "USB HOST: OFF", C_DIMT);
+            }
         }
         break;
     }
@@ -1368,9 +1573,6 @@ static void draw_visual(void)
             cv_line(12, ys, xs, y0, C_RED);
             cv_line(xs, y0, 150, y0, C_RED);
             cv_line(150, y0, 150 + (xs - 12), ye, C_RED);
-        } else {
-            text_c(120, 54, &FONT_XS, "VELOCITY, MOD WHEEL (CC 1)", C_DIMT);
-            text_c(120, 70, &FONT_XS, "AND AFTERTOUCH: THE KEYS' PRESSURE", C_DIMT);
         }
         break;
     }
@@ -1436,7 +1638,7 @@ void app_frame(void)
         if (m->voices != last_voices || (m->voices && (m->mask_now[0] != last_mask[0] ||
                                                        m->mask_now[1] != last_mask[1])))
             ui.redraw = 1;
-        if (ui.sec == SEC_LOOPER || ui.sec == SEC_GLOBAL || m->loop_state == LS_ARMED)
+        if (ui.sec == SEC_LOOPER || ui.sec == SEC_GLOBAL || ui.sec == SEC_MATRIX || m->loop_state == LS_ARMED)
             ui.redraw = 1;
         last_voices = m->voices;
         last_mask[0] = m->mask_now[0];
@@ -1466,6 +1668,20 @@ int app_expect(const char *what, int *got)
         *got = cur.osc[1].mask;
     else if (!strcmp(what, "cutf"))
         *got = cur.filt.cutf;
+    else if (!strcmp(what, "x1src"))
+        *got = cur.mtx[0].src;
+    else if (!strcmp(what, "x1amt"))
+        *got = cur.mtx[0].amt;
+    else if (!strcmp(what, "edo"))
+        *got = set.glob.edo;
+    else if (!strcmp(what, "system"))
+        *got = set.glob.system;
+    else if (!strcmp(what, "ahz"))
+        *got = set.glob.a_hz100;
+    else if (!strcmp(what, "midi"))
+        *got = set.glob.midi;
+    else if (!strcmp(what, "note0"))     /* the note the FM-1's first key plays */
+        *got = fm1_note(0);
     else if (!strcmp(what, "drive"))
         *got = cur.filt.drive;
     else if (!strcmp(what, "fmode"))
