@@ -114,7 +114,7 @@ static void apply(const plate_params_t *p)
     P.have = *p;
 }
 
-/* -------------------------------------------------------------------------- reverb.h, for the engine --- */
+/* ------------------------------------------------------------------------------------ for the effects --- */
 void plate_init(void)
 {
     uint16_t *m = mem;

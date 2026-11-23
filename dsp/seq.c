@@ -163,7 +163,7 @@ static void arp_step(void)
     } else {
         arp_stop_note();
         eng_note_on(key, eng_vel(arp_vel(key)), 0);
-        A.gate_off = 1;
+        A.gate_off = A.trig;               /* without TRIG the note is held, and the next steps move it */
     }
     A.sounding = key;
 }

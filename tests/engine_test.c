@@ -175,6 +175,27 @@ static void modes(void)
     }
     masque_note_off(60); masque_note_off(64); run(0, 0, (uint32_t)FS);
     CHECK(masque_meter()->voices == 0, "ARP: %u voices left", masque_meter()->voices);
+    /* the sustain pedal holds a key let go; up, it goes */
+    p.arp.type = AR_NONE;
+    masque_panic(); masque_set_patch(&p); run(0, 0, 256);
+    masque_note_on(60, 100); masque_cc(64, 127); run(0, 0, 1024); masque_note_off(60); run(0, 0, (uint32_t)FS);
+    CHECK(masque_meter()->voices == 1, "SUSTAIN: %u voices with the pedal down", masque_meter()->voices);
+    masque_cc(64, 0); run(0, 0, (uint32_t)FS);
+    CHECK(masque_meter()->voices == 0, "SUSTAIN: %u voices after the pedal", masque_meter()->voices);
+    /* the arpeggiator without TRIG: one voice moving; HOLD: it goes on after the keys are let go */
+    p.arp.type = AR_1OCT;
+    p.arp.trig = 0;
+    p.arp.hold = 1;
+    masque_panic(); masque_set_patch(&p); run(0, 0, 256);
+    masque_note_on(60, 100); masque_note_on(64, 100); run(0, 0, (uint32_t)FS / 2);
+    CHECK(masque_meter()->voices == 1, "ARP legato: %u voices", masque_meter()->voices);
+    masque_note_off(60); masque_note_off(64); run(0, 0, (uint32_t)FS);
+    CHECK(masque_meter()->voices == 1, "ARP HOLD: %u voices after the keys are let go", masque_meter()->voices);
+    p.arp.type = AR_NONE;
+    p.arp.trig = 1;
+    p.arp.hold = 0;
+    masque_set_patch(&p); run(0, 0, (uint32_t)FS);
+    CHECK(masque_meter()->voices == 0, "ARP off: %u voices left", masque_meter()->voices);
     /* the looper: record a key, stop, it plays again by itself */
     p.arp.type = AR_NONE;
     masque_panic(); masque_set_patch(&p); run(0, 0, 256);

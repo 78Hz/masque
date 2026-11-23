@@ -81,6 +81,8 @@ static struct {
 /* the part: controllers and the LFOs */
 static struct {
     float bend, bend_to, wheel, chat;
+    float at_all;                          /* aftertouch for the part (the LFOs, the effects): the channel's, or the
+                                            * strongest key's (the FM-1's keys give each its own) */
     int sustain;
     float lph[2], lval[2][NSTEP + 1], lhold[2], lenv_t;
     uint32_t lrng;
@@ -228,7 +230,7 @@ static void lfo_block(uint32_t steps)
     uint32_t s;
     float wheel_amt[2] = {0, 0}, wheel_spd[2] = {0, 0};
     for (i = 0; i < 2; i++) {               /* the wheel's and aftertouch's hold on the LFOs */
-        float w = P.wheel.amt / 99.0f * S.wheel, a = P.at.amt / 99.0f * S.chat;
+        float w = P.wheel.amt / 99.0f * S.wheel, a = P.at.amt / 99.0f * S.at_all;
         if (P.wheel.dest == (i ? MD_L2AMT : MD_L1AMT)) wheel_amt[i] += w;
         if (P.at.dest == (i ? MD_L2AMT : MD_L1AMT)) wheel_amt[i] += a;
         if (P.wheel.dest == (i ? MD_L2SPD : MD_L1SPD)) wheel_spd[i] += w;
@@ -1063,8 +1065,8 @@ static void fx_mods(fx_ctl_t *c)           /* the effects' type and balance, aft
     }
     if (P.wheel.dest == MD_FX1BAL) b1 += (float)P.wheel.amt / 99.0f * S.wheel;
     if (P.wheel.dest == MD_FX2BAL) b2 += (float)P.wheel.amt / 99.0f * S.wheel;
-    if (P.at.dest == MD_FX1BAL) b1 += (float)P.at.amt / 99.0f * S.chat;
-    if (P.at.dest == MD_FX2BAL) b2 += (float)P.at.amt / 99.0f * S.chat;
+    if (P.at.dest == MD_FX1BAL) b1 += (float)P.at.amt / 99.0f * S.at_all;
+    if (P.at.dest == MD_FX2BAL) b2 += (float)P.at.amt / 99.0f * S.at_all;
     c->b1 = fm_clampf(b1, 0.0f, 1.0f);
     c->b2 = fm_clampf(b2, 0.0f, 1.0f);
     c->t1 = P.fx.t1;
@@ -1133,9 +1135,10 @@ void masque_render(float *l, float *r, uint32_t n)
     }
     /* the controllers glide; the LFOs for the block */
     S.bend += (S.bend_to - S.bend) * 0.5f;
-    if (S.held == 0 && !any_gate()) {
-        /* nothing down: the LFOs' delay starts again at the next key */
-    }
+    S.at_all = S.chat;
+    for (i = 0; i < MQ_MAX_VOICES; i++)
+        if (V[i].used && V[i].gate && V[i].at > S.at_all)
+            S.at_all = V[i].at;
     lfo_block((n + CR - 1) / CR);
     if (para_mode()) {                     /* the shared envelopes run once for every voice, a block ahead */
         uint32_t st, e;
