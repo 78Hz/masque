@@ -1,0 +1,22 @@
+# MASQUE's words for a screen reader (fm1-reader): the text on the screen <TAB> what to say.
+# url: https://78hz.github.io/masque/words/
+MASQUE	masque
+OSC 1	oscillator one
+OSC 2	oscillator two
+CUTF	cutoff
+RESO	resonance
+TRK	tracking
+SEMI	semitones
+SPD	speed
+DLAY	delay
+DCAY	decay
+AMT	amount
+PORT	portamento
+PANS	pan spread
+BIDI	bidirectional
+MOLY	moly
+PARA	paraphonic
+1TYP	effect one type
+2TYP	effect two type
+1BAL	effect one balance
+2BAL	effect two balance

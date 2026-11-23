@@ -1,0 +1,56 @@
+/* SPDX-License-Identifier: MPL-2.0 */
+/* MASQUE — the values as the panel shows them (the MASK1's own words, where it has them). */
+#include "masque.h"
+
+static const char *const N_LOOP[NLOOPS] = {"NO", "YES", "BIDI"};
+static const char *const N_FMODE[NFMODES] = {"LP", "HP", "BP", "NOTCH"};
+static const char *const N_EXTRA[NEXTRAS] = {"12DB", "24DB", "LP1", "LP2", "LP3", "LP4", "LP5", "LP6", "LP7",
+                                             "HP1", "HP2", "HP3", "HP4", "HP5", "HP6", "HP7"};
+static const char *const N_PMODE[NPMODES] = {"POLY", "MONO", "SLUR", "MONO PORTA", "PARA", "MOLY", "PARA SLUR",
+                                             "MONO RETRIG", "POLY RETRIG"};
+static const char *const N_LWAVE[NLWAVES] = {"SIN", "SQR", "UP", "DOWN", "SAWS", "STEP", "HSIN", "RAND"};
+static const char *const N_LDEST[NLDESTS] = {"FREQ", "VOL", "FILT", "MASK", "PAN", "O1 FREQ", "O1 VOL", "O1 MASK",
+                                             "O2 FREQ", "O2 VOL", "O2 MASK", "N FREQ", "N VOL", "FX1 TYP",
+                                             "FX2 TYP", "FX2 BAL"};
+static const char *const N_MDEST[NMDESTS] = {"FLT", "LFO1 AMT", "LFO1 SPD", "LFO2 AMT", "LFO2 SPD", "VOL", "MASK",
+                                             "FREQ", "O1 VOL", "O1 MASK", "O2 VOL", "O2 MASK", "N FREQ", "N VOL",
+                                             "FX1 BAL", "FX2 BAL"};
+static const char *const N_VDEST[NVDESTS] = {"FLT", "F EG", "VOL", "MASK", "P EG", "ATK"};
+static const char *const N_ARP[NARPS] = {"NONE", "1OCT", "DBL", "2OCT", "ALT", "3OCT", "PONG", "PON2", "PON3", "RND",
+                                         "RND2", "RND3", "MIN", "MAJ", "SUS2", "SUS4", "7TH", "MIN2", "MAJ2", "SU22",
+                                         "SU42", "7TH2", "1O", "2O", "3O", "5TH", "5TH2"};
+static const char *const N_VCURVE[7] = {"1", "2", "3", "4", "5", "6", "MAX"};
+
+const char *masque_name_of(int kind, int v)
+{
+    switch (kind) {
+    case NAME_LOOP: return v >= 0 && v < NLOOPS ? N_LOOP[v] : "?";
+    case NAME_FMODE: return v >= 0 && v < NFMODES ? N_FMODE[v] : "?";
+    case NAME_EXTRA: return v >= 0 && v < NEXTRAS ? N_EXTRA[v] : "?";
+    case NAME_PMODE: return v >= 0 && v < NPMODES ? N_PMODE[v] : "?";
+    case NAME_LWAVE: return v >= 0 && v < NLWAVES ? N_LWAVE[v] : "?";
+    case NAME_LDEST: return v >= 0 && v < NLDESTS ? N_LDEST[v] : "?";
+    case NAME_MDEST: return v >= 0 && v < NMDESTS ? N_MDEST[v] : "?";
+    case NAME_VDEST: return v >= 0 && v < NVDESTS ? N_VDEST[v] : "?";
+    case NAME_ARP: return v >= 0 && v < NARPS ? N_ARP[v] : "?";
+    case NAME_VCURVE: return v >= 0 && v < 7 ? N_VCURVE[v] : "?";
+    default: return "?";
+    }
+}
+
+void masque_fx_name(int which, int t, char *out)   /* "CH03", "RV12", "OFF" */
+{
+    static const char F1[4][3] = {"CH", "DT", "BC", "RM"}, F2[3][3] = {"DL", "RV", "DT"};
+    int fam, var;
+    if (t <= 0 || (which == 1 && t >= NF1) || (which == 2 && t >= NF2)) {
+        out[0] = 'O'; out[1] = 'F'; out[2] = 'F'; out[3] = 0;
+        return;
+    }
+    fam = (t - 1) / 16;
+    var = (t - 1) % 16 + 1;
+    out[0] = which == 1 ? F1[fam][0] : F2[fam][0];
+    out[1] = which == 1 ? F1[fam][1] : F2[fam][1];
+    out[2] = (char)('0' + var / 10);
+    out[3] = (char)('0' + var % 10);
+    out[4] = 0;
+}

@@ -1,0 +1,135 @@
+# MASQUE in the host simulator:  python3 fm1-base/tools/build.py . --host
+#   build/host/masque_host tests/host/basic.txt build/host
+wait 800
+shot home.png
+expect sec 0
+expect prog 0
+expect edited 0
+# a chord on the FM-1's keys: three voices, then nothing
+key 7 down 100
+key 11 down 90
+key 14 down 110
+wait 400
+expect voices 3
+shot home_playing.png
+key 7 up
+key 11 up
+key 14 up
+wait 4000
+expect voices 0
+# K1 on HOME: MASK 1 from 124 to 120; ALGORITHM moves it too; the sound is edited
+turn K1 -4
+expect mask1 120
+turn ALGO 1
+expect mask1 121
+expect edited 1
+# SEL: OSC 1, then OSC 2; ALGORITHM there turns MASK 2
+tap SEL
+expect sec 1
+shot osc1.png
+tap SEL
+expect sec 2
+turn ALGO 2
+expect mask2 49
+# ENV: the envelope of OSC 2
+tap ENV
+expect env 1
+shot osc2_env.png
+tap ENV
+expect env 0
+# SEL to the FILTER (NOISE between)
+tap SEL
+tap SEL
+expect sec 4
+shot filter.png
+turn K1 -10
+expect cutf 76
+# SELECT walks the rows: FILTER's second row, then PITCH
+turn SELECT 1
+expect row 1
+turn SELECT 1
+expect sec 5
+# LFO, EDIT, FX, ARP, SEQ, GLO
+tap LFO
+expect sec 6
+shot lfo1.png
+tap EDIT
+expect sec 5
+tap EDIT
+expect sec 8
+tap EDIT
+expect sec 9
+shot general.png
+tap FX
+expect sec 10
+shot fx.png
+tap ARP
+expect sec 11
+turn K1 1
+expect arp 1
+shot arp.png
+turn K1 -1
+expect arp 0
+tap GLO
+expect sec 13
+shot global.png
+# MIDI in from the TRS jack: a chord
+midi TRS 90 30 64
+midi TRS 90 3C 64
+midi TRS 90 43 64
+wait 300
+expect voices 3
+midi TRS B0 7B 00
+wait 4000
+expect voices 0
+# the looper: REC arms, the first note starts it, REC again plays it back
+tap SEQ
+expect sec 12
+tap REC
+expect loop 1
+key 7 down 100
+wait 300
+expect loop 2
+key 7 up
+wait 500
+tap REC
+expect loop 3
+wait 200
+shot looper.png
+tap PLAY
+expect loop 4
+wait 3000
+expect voices 0
+# PRESETS: the next sounds; a rest loads it
+turn PRESET 1
+wait 400
+expect prog 1
+expect edited 0
+turn PRESET 4
+wait 400
+expect prog 5
+# OCT- / OCT+, both: back to 0
+tap OCT+
+expect octave 1
+tap OCT-
+tap OCT-
+expect octave -1
+press OCT-
+tap OCT+
+release OCT-
+expect octave 0
+# WRITE: SAVE twice writes the sound into U000; it is the sound now, kept across a power cycle
+tap SAVE
+expect sec 14
+shot write.png
+tap SAVE
+expect user0 1
+expect prog 40
+expect edited 0
+reboot
+wait 800
+expect prog 40
+expect user0 1
+tap HOME
+expect sec 0
+shot home_user.png

@@ -1,0 +1,22 @@
+# MASQUE: a bitmask synthesizer for the M-VAVE FM-1, after Kodamo's MASK1 (fm1-base's tools/build.py)
+name = "MASQUE"
+id_prefix = "FM-1_61"           # package identity: dev builds FM-1_6100, releases FM-1_61XXYYZZ
+usb_manufacturer = "MASQUE"
+usb_product = "MASQUE FM-1"
+o2 = ["dsp/engine.c", "dsp/seq.c", "dsp/fx.c", "dsp/plate.c", "dsp/names.c", "dsp/presets.c"]   # the engine, at -O2
+include = ["dsp"]
+vendored = ["fm1-base/"]        # the platform, a submodule: its checks are its own
+words = "words.tsv"
+ble = false                     # no radio: the voices want the RAM
+backup = true                   # the setup and the user sounds over USB (tools/fm1_backup.py)
+backup_holds = "the setup and the user sounds"
+cpu2 = true                     # the second core: half the voices
+cpu2_fallback = true            # a unit whose second core misreads goes on with one, until power-off
+tagline = "a bitmask synthesizer"
+licence = "MPL-2.0"
+author = "MASQUE contributors"
+description = "A bitmask synthesizer after Kodamo's MASK1: two oscillators a voice, each a sine read through a 9-bit mask (512 waveforms), with mask and pitch envelopes, a sample-and-hold noise, a resonant state-variable filter (12 or 24 dB, four modes), four loopable envelopes, two LFOs, nine play modes with slur detection, an arpeggiator, a looper and two effects. Ten voices, forty factory sounds, 128 of your own."
+tags = ["synth"]
+repo = "https://github.com/78Hz/masque"
+install = "https://github.com/78Hz/masque#installing"
+screenshot = "docs/img/screen.png"
