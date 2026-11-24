@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MPL-2.0 */
 /* MASQUE — the factory sounds, P00..P39: each the INIT sound and what it changes. */
 #include "presets.h"
+#include "fastmath.h"
 
 static void E(mq_env_t *e, int l, int a, int d, int s, int r, int loop)
 {
@@ -51,11 +52,76 @@ static void X(mq_patch_t *p, int r, int src, int dest, int amt)   /* a matrix ro
     p->mtx[r].smooth = 3;
     p->mtx[r].zone = XZ_ALL;
 }
+/* The presets were written with the first effects' types: a family and one of its sixteen. Each is turned here into
+ * an effect and the settings that variant had. */
+enum { F1_OFF, F1_CH = 1, F1_DT = 17, F1_BC = 33, F1_RM = 49, F1_MS = 65 };
+enum { F2_OFF, F2_DL = 1, F2_RV = 17, F2_DT = 33, F2_MK = 49 };
+static int lg2i(float x, float k) { return (int)(k * fm_log2f(x) + 0.5f); }   /* k log2 x, rounded */
+static int cl99(int v) { return v < 0 ? 0 : v > 99 ? 99 : v; }
+static void fx_old(int which, int code, uint8_t *t, uint8_t *q)
+{
+    static const uint16_t MS_MASKS[16] = {31, 15, 29, 47, 63, 23, 7, 78, 95, 24, 56, 111, 143, 287, 319, 447};
+    static const uint16_t MK_MASKS[16] = {31, 15, 7, 8, 23, 47, 56, 78, 63, 95, 111, 24, 159, 287, 319, 447};
+    static const uint8_t RV_SZ[16] = {5, 15, 25, 30, 40, 45, 50, 60, 65, 70, 75, 80, 85, 90, 95, 99};
+    static const uint8_t RV_DC[16] = {12, 20, 26, 33, 37, 42, 46, 51, 55, 59, 64, 68, 72, 77, 82, 89};
+    static const uint8_t RV_DM[16] = {78, 67, 72, 56, 61, 50, 56, 45, 50, 39, 45, 33, 39, 28, 33, 22};
+    static const uint16_t DL_MS[8] = {95, 140, 190, 250, 320, 400, 520, 700};
+    int fam = code ? (code - 1) / 16 : -1, v = code ? (code - 1) % 16 : 0, e;
+    if (which == 2 && fam >= 0)
+        fam += 8;
+    switch (fam) {
+    case 0: e = v < 10 ? E_CHORUS : v < 14 ? E_FLANGER : E_PHASER; break;
+    case 1: case 10: e = v < 12 ? E_DIST : E_FOLD; break;
+    case 2: e = E_CRUSH; break;
+    case 3: e = v < 4 ? E_TREM : E_RING; break;
+    case 4: e = E_SHAPER; break;
+    case 8: e = E_DELAY; break;
+    case 9: e = E_PLATE; break;
+    case 11: e = E_SLICER; break;
+    default: e = E_OFF; break;
+    }
+    *t = (uint8_t)e;
+    masque_fx_defaults(e, q);
+    switch (e) {   /* the bytes as dsp/fx.c lays them out */
+    case E_CHORUS: q[0] = (uint8_t)(10 + 5 * v); q[1] = (uint8_t)(30 + 4 * v); q[3] = (uint8_t)cl99(50 + 5 * v); q[5] = 58; break;
+    case E_FLANGER:
+        q[0] = (uint8_t)(10 + 7 * (v - 10)); q[1] = 55; q[2] = (uint8_t)(55 + 12 * (v - 10)); q[3] = 50; q[5] = 62;
+        break;
+    case E_PHASER: q[0] = v == 14 ? 22 : 45; q[1] = 80; q[2] = v == 14 ? 55 : 30; q[3] = 60; q[4] = v == 14 ? 3 : 5; break;
+    case E_DIST: q[0] = (uint8_t)(15 + 5 * v); q[1] = (uint8_t)(72 - 2 * v); q[3] = (uint8_t)(v & 1 ? 40 : 0); break;
+    case E_FOLD: q[0] = (uint8_t)(60 + 10 * (v - 12)); q[1] = (uint8_t)(v & 1 ? 40 : 0); q[2] = (uint8_t)(72 - 2 * v); break;
+    case E_CRUSH: {
+        int p0 = 10 + 5 * (v & 7) + (v >= 8 ? 5 : 0);
+        float hold = 1.0f + 15.0f * (float)(6 * (v & 7)) / 99.0f;
+        q[0] = (uint8_t)(12 - p0 / 10);
+        q[1] = (uint8_t)cl99(lg2i(hold, 99.0f / 5.0f));
+        q[2] = (uint8_t)(v >= 8 ? 40 + 6 * (v - 8) : 0);
+        break;
+    }
+    case E_TREM: q[0] = (uint8_t)cl99(lg2i(0.3f * fm_exp2f((float)(28 + 5 * v) / 8.0f) / 0.1f, 13.0f)); q[1] = 80; q[4] = 99; break;
+    case E_RING: q[0] = (uint8_t)(50 + 4 * (v - 4)); q[2] = (uint8_t)(v & 1 ? 40 : 0); q[3] = (uint8_t)(v >= 12 ? 50 : 0); break;
+    case E_SHAPER:
+        q[0] = (uint8_t)(MS_MASKS[v] & 255); q[1] = (uint8_t)(MS_MASKS[v] >> 8);
+        q[2] = (uint8_t)(30 + 3 * v); q[3] = (uint8_t)(v & 1 ? 30 : 0);
+        break;
+    case E_DELAY:
+        q[0] = (uint8_t)cl99(lg2i((float)DL_MS[v >> 1] / 20.0f, 19.0f)); q[1] = (uint8_t)(35 + 2 * v);
+        q[3] = (uint8_t)(v & 1); q[5] = (uint8_t)(v >= 12 ? 40 : v >= 8 ? 15 : 0);
+        break;
+    case E_PLATE: q[0] = RV_SZ[v]; q[1] = RV_DC[v]; q[2] = RV_DM[v]; q[3] = (uint8_t)(4 + 2 * v); break;
+    case E_SLICER:
+        q[0] = (uint8_t)(MK_MASKS[v] & 255); q[1] = (uint8_t)(MK_MASKS[v] >> 8);
+        if (v < 8) q[2] = (uint8_t)(20 + 8 * v);
+        else { q[3] = 1; q[6] = (uint8_t)(2 + (v - 8)); }   /* synced: 1/32 .. 1/8D */
+        break;
+    default: break;
+    }
+}
 static void FXS(mq_patch_t *p, int t1, int b1, int t2, int b2)
 {
-    p->fx.t1 = (uint8_t)t1;
+    fx_old(1, t1, &p->fx.t1, p->fx.p1);
+    fx_old(2, t2, &p->fx.t2, p->fx.p2);
     p->fx.b1 = (uint8_t)b1;
-    p->fx.t2 = (uint8_t)t2;
     p->fx.b2 = (uint8_t)b2;
 }
 static void NAME(mq_patch_t *p, const char *s)
@@ -408,6 +474,8 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[1].env, 56, 0, 44, 0, 40, 0);
         p->arp.type = AR_RND2; p->arp.spd2 = 75;
         FXS(p, F1_OFF, 0, F2_DL + 9, 34);
+        p->fx.p2[2] = 1;                   /* the echo a dotted eighth, with the arpeggio */
+        p->fx.p2[6] = 8;
         break;
     case 32:  /* both mask envelopes bouncing, slowly, in a long room */
         NAME(p, "DEEP SPACE");
@@ -425,7 +493,7 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[1].env, 40, 0, 50, 40, 40, 0);
         F(p, 86, 10, FM_LP, 50, FX_LP1 + 4);
         LFO(p, 0, 9, 22, LD_FREQ, LW_SIN, 0, 0);
-        FXS(p, F1_BC + 2, 25, F2_RV + 6, 26);
+        FXS(p, F1_BC + 2, 25, F2_DL + 14, 30);   /* the tape echo: its wobble */
         break;
     case 34:  /* the pitch falling fast, the masks with it */
         NAME(p, "ZAPPER");
@@ -434,7 +502,7 @@ void preset_get(int n, mq_patch_t *p)
         E(&p->osc[0].env, 84, 0, 58, 0, 50, 0);
         E(&p->osc[1].env, 40, 0, 52, 0, 46, 0);
         p->pitch.start = 30; p->pitch.spd = 20;
-        FXS(p, F1_OFF, 0, F2_DL + 3, 30);
+        FXS(p, F1_MS + 7, 45, F2_MK + 11, 40);   /* the mask shaper, and the slicer in sixteenths */
         break;
     case 35:  /* SLUR: neighbouring keys played legato slide */
         NAME(p, "SLUR LEAD");

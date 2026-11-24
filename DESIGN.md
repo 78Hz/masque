@@ -34,10 +34,19 @@ the TRS jack is the main path, USB host (a powered hub) the other. MPE notes are
 **Tuning** (agreed 2026-11-24): KIST's, for the whole part, not per sound. Keys, SEMI, the octave, glides and bends in
 the tuning's steps; the arpeggiator's intervals rounded to the nearest steps; the filter's tracking by frequency.
 
-**Effects.** The MASK1's families and numbering; KIST-P's plate for the reverbs; a 16-bit floating-point delay line
-(0.74 s) so the delay fits beside the plate, the looper and the screen in the pool.
+**Effects.** Two slots, each any of twelve effects with up to six settings (choosing one sets them; the sound keeps
+them), one page a slot. Effects needing the same memory are kept apart (the chorus's and flanger's short line, the
+delay's and slicer's long one, the plate); the effects' settings are described in one table in fx.c that the DSP, the
+panel and the CC map all read. KIST-P's plate for the reverb; a 16-bit floating-point delay line (0.74 s) so the delay fits beside the plate, the
+looper and the screen in the pool. Fractional (Hermite, linear) reads with the times smoothed, so moving them bends
+pitch rather than clicking; saturation and filtering inside every feedback loop; distortion and the mask shaper 4x
+oversampled (the voices' 15-tap halfbands); equal-power mixes; a change of effect fades out, clears and fades in;
+a DC blocker after both. The mask shaper reads the signal's level as the phase of a masked sine (bitmask.h, at
+4x). The mask slicer reads the last window of sound through the mask's section map (the same AND / XOR / multiply
+as the oscillator), with a 1 ms fade only where a section's start does not follow on from the one before; it shares
+the delay's line.
 
-**Storage.** The setup (the part's settings and the sound as it was left) and six banks of 24 user sounds (128 used),
+**Storage.** The setup (the part's settings and the sound as it was left) and six banks of 22 user sounds (128 used),
 each a store object; all of them backed up over USB together. A sound is 154 bytes with its matrix.
 
 **Panel.** Sections on the buttons as the MASK1 groups them (SEL the four voice sections, ENV their envelopes, EDIT the

@@ -118,7 +118,8 @@ once; 0 off); let go, it glides to END at the same speed.
 | 2 | DLAY 0..99 | DCAY 0..99 | | |
 
 Free-running, for the whole part. **DEST**: FREQ, VOL, FILT, MASK, PAN, O1 FREQ, O1 VOL, O1 MASK, O2 FREQ, O2 VOL,
-O2 MASK, N FREQ, N VOL, FX1 TYP, FX2 TYP, FX2 BAL. **WAVE**: SIN, SQR, UP, DOWN, SAWS (two small saws), STEP (four
+O2 MASK, N FREQ, N VOL, FX1 MOD, FX2 MOD (the effect's first setting, K3 on its page: up to 50 either way, a
+mask up to 128), FX2 MIX. **WAVE**: SIN, SQR, UP, DOWN, SAWS (two small saws), STEP (four
 stairs), HSIN (half sines), RAND (sample and hold). **DLAY**: the LFO waits this long after the first key, then fades
 in (not while the mod wheel or aftertouch moves its amount or speed). **DCAY**: it fades out after this long (0: never).
 
@@ -139,7 +140,7 @@ note), and CC 0..127. **Destinations**, each voice's: PITCH, O1 PITCH, O2 PITCH 
 MASK (up to 128 masks, through the sub-masks), MASK SPD (the mask envelopes' speed), VOL, O1 VOL, O2 VOL, N VOL,
 N FREQ, CUTF (up to 72 semitones), RESO, DRIVE, F ENV and P ENV (the envelopes' depth), ATK and REL (their times, at
 the note's start and its release), PAN; and the part's, which follow the last note: LFO1 AMT, LFO1 SPD, LFO2 AMT,
-LFO2 SPD, FX1 BAL, FX2 BAL.
+LFO2 SPD, FX1 MIX, FX2 MIX, FX1 MOD, FX2 MOD (the effect's first setting, as the LFOs').
 
 **LO, HI**: the part of the source's travel used (beyond HI, all of it). **CURVE**: LIN straight, SOFT quick at the
 start, HARD slow at the start, S both, BIP a source that rests in its middle (a CC at 64). **SMOOTH**: the row glides
@@ -178,14 +179,49 @@ envelopes faster up the keyboard, slower down it. **BEND**: the pitch bend's ran
 
 ## FX
 
-| K1 | K2 | K3 | K4 |
-|---|---|---|---|
-| 1TYP | 1BAL 0..100 | 2TYP | 2BAL 0..100 |
+Two effects, one after the other. Each has its own page: **FX** shows FX 1, and pressed again FX 2 (the tabs at the
+top say which). Each page has two rows:
 
-**FX1**: CH01..CH16 chorus (CH11..14 flangers, CH15..16 phasers), DT01..16 distortion (DT13..16 fold the wave),
-BC01..16 bitcrusher (BC09..16 with their own slow sweep), RM01..16 ring modulator (RM01..04 a stereo tremolo).
-**FX2**: DL01..16 delay (95 ms .. 0.7 s, the even ones ping-pong), RV01..16 reverb (a plate, small and short to
-large and long), DT01..16 distortion. The balances: 0 dry, 100 the effect.
+| Row | K1 | K2 | K3 | K4 |
+|---|---|---|---|---|
+| 1 | TYPE | MIX 0..100 | the effect's first setting | its second |
+| 2 | its third .. sixth | | | |
+
+Turning TYPE shows the list of effects for a moment. Choosing one sets its settings to a starting point, which the
+sound then keeps. MIX is equal power: 0 dry, 50 both at full, 100 the effect alone. A new effect fades the old one out
+and starts clean. Either slot takes any effect, but two that need the same memory cannot be together: the chorus and
+the flanger, the delay and the mask slicer, two plates (the list marks them IN USE).
+
+| Effect | Settings |
+|---|---|
+| **CHORUS** | RATE, DEPTH, VOICES (1..3 a side), SPREAD (stereo), DELAY (2..20 ms), LOW CUT (of the wet) |
+| **FLANGER** | RATE, DEPTH, FEEDBACK (−99..99: either sign), SPREAD, MANUAL (0.1..5 ms), TONE (in the feedback) |
+| **PHASER** | RATE, DEPTH, FEEDBACK (−99..99), SPREAD, STAGES (2..12), CENTRE (100 Hz..8 kHz) |
+| **DISTORTION** | DRIVE, TONE, CURVE (SOFT, HARD, TUBE, FUZZ), BIAS, LOW CUT (before it: tighter), LEVEL; 4x oversampled |
+| **WAVEFOLDER** | FOLD (x1..x16), BIAS, TONE, LEVEL; 4x oversampled |
+| **BITCRUSHER** | BITS (1..16), RATE (the sample rate), JITTER (the rate wandering), TONE |
+| **RING MOD** | FREQ (0.3 Hz..1.6 kHz), DEPTH, SPREAD, SHAPE (the sine squared off) |
+| **TREMOLO** | RATE (or a note value), DEPTH, SYNC, SHAPE, SPREAD (99: an auto-pan) |
+| **MASK SHAPER** | MASK, DRIVE, BIAS, TONE (below) |
+| **DELAY** | TIME (20..740 ms, or a note value), FEEDBACK, SYNC, PING-PONG, TONE (of the repeats), WOW (tape) |
+| **PLATE REVERB** | SIZE, DECAY (0.2..11 s), DAMP, PRE-DLY (0..99 ms), LOW CUT (into it), WIDTH |
+| **MASK SLICER** | MASK, WINDOW (4..720 ms, or a note value), SYNC, TONE, FADE (0.1..5 ms) (below) |
+
+With SYNC on, TIME (RATE, WINDOW) turns through note values, 1/64 to 1/2 with triplets (T) and dotted (D), following
+MIDI clock while it runs, else the arpeggiator's SPD; the tempo shows at the top right. The delay's repeats are
+filtered by TONE, lose their lowest lows and saturate rather than run away, so FEEDBACK can sit near the top. A synced
+time too long for the delay's 0.74 s is halved.
+
+**The mask shaper** applies the oscillators' idea to the sound itself: the signal's level becomes the phase of a
+masked sine. At mask 31 it is a gentle sine fold; every other mask is a transfer curve of its own: repeated, reversed,
+inverted or silenced pieces, folded over the signal as DRIVE pushes it further around the cycle. BIAS shifts where the
+signal sits on it. It runs at four times the rate, so the steps do not alias. The page draws the curve.
+
+**The mask slicer** applies it to time: it keeps the last WINDOW of sound and plays it back cut into the 32 sections
+of a cycle, put together as the mask reads the sine. Mask 31 plays the window as it was, one window late; 15 plays its
+first half twice, 7 its first quarter four times (a stutter), FLIP plays sections backwards, INVERT turns them over,
+SILENCE gates them, REPEAT plays the pieces three times as fast (an octave and a fifth up). Where one section's sound
+does not follow on from the last, the cut is faded over FADE. Synced to the tempo, it is a rhythmic glitch.
 
 ## ARP
 
@@ -289,7 +325,7 @@ below (a controller sending only CC 20 moves it four masks at a time).
 | LFO 2 | 108 AMT, 109 SPD, 110 DEST, 111 WAVE, 112 DLAY, 113 DCAY |
 | MATRIX | the rows' amounts: 102..107 rows 1..6, 117 row 7, 118 row 8 |
 | GENERAL | 3 MODE, 7 VOL, 12 SEMI, 5 PORT, 8 PANS, 9 RATE, 13 BEND |
-| FX | 94 1TYP, 93 1BAL, 95 2TYP, 91 2BAL |
+| FX | 94 FX1 TYPE, 93 FX1 MIX, 95 FX2 TYPE, 91 FX2 MIX; FX 1's six settings 54..59, FX 2's 60..65 (a mask: its top seven bits) |
 | ARP | 88 TYPE, 89 SPD, 90 HOLD, 92 TRIG |
 | (the part) | 1 mod wheel, 64 sustain, 120 / 123 all off |
 

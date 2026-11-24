@@ -17,10 +17,10 @@
 #include "masque.h"
 #include "presets.h"
 
-#define SET_MAGIC 0x3251534Du            /* "MSQ2" */
+#define SET_MAGIC 0x3451534Du            /* "MSQ4" */
 #define SET_VERSION 1u
 #define NUSER 128
-#define BANK_N 24                        /* sounds a store object holds (3840 bytes) */
+#define BANK_N 22                        /* sounds a store object holds (3840 bytes) */
 #define NBANKS 6
 #define NPROG (PRESET_COUNT + NUSER)     /* P00..P39, U000..U127 */
 
@@ -40,7 +40,7 @@ typedef struct {
     uint16_t version, count;
     mq_patch_t p[BANK_N];
 } bank_t;
-#define BANK_MAGIC 0x324B514Du           /* "MQK2" */
+#define BANK_MAGIC 0x344B514Du           /* "MQK4" */
 static bank_t banks[NBANKS];
 
 static mq_patch_t cur;                   /* the sound being played and edited */
@@ -271,7 +271,8 @@ static void prog_name(int prog, char *b)
 
 /* ----------------------------------------------------------------------------------- the parameters --- */
 /* each value on the panel: where it lives, its range and how it reads */
-enum { K_U8, K_S8, K_U16, K_NAMES, K_SPD2, K_FX1, K_FX2, K_GLOB, K_NONE };
+enum { K_U8, K_S8, K_U16, K_NAMES, K_SPD2, K_FXT, K_GLOB, K_FXP, K_NONE };   /* K_FXT: names = slot; K_FXP: slot x 8
+                                                                            * + knob */
 typedef struct {
     const char *label;
     uint8_t kind, names;
@@ -327,8 +328,6 @@ static const pdesc_t ROWS[NSEC][MAXROWS][4] = {
                       {"PORT", K_U8, 0, 0, 13, PO(gen.port)}},
                      {{"PANS", K_U8, 0, 0, 99, PO(gen.pans)}, {"RATE", K_U8, 0, 0, 99, PO(gen.rate)},
                       {"BEND", K_U8, 0, 0, 12, PO(gen.bend)}, NONE}},
-    [SEC_FX] = {{{"1TYP", K_FX1, 0, 0, NF1 - 1, PO(fx.t1)}, {"1BAL", K_U8, 0, 0, 100, PO(fx.b1)},
-                 {"2TYP", K_FX2, 0, 0, NF2 - 1, PO(fx.t2)}, {"2BAL", K_U8, 0, 0, 100, PO(fx.b2)}}},
     [SEC_ARP] = {{{"TYPE", K_NAMES, NAME_ARP, 0, NARPS - 1, PO(arp.type)}, {"SPD", K_SPD2, 0, 10, 200, PO(arp.spd2)},
                   {"HOLD", K_U8, NAME_LOOP, 0, 1, PO(arp.hold)}, {"TRIG", K_U8, NAME_LOOP, 0, 1, PO(arp.trig)}}},
 };
@@ -351,6 +350,7 @@ static const char *const ACTIONS[4] = {"WRITE", "INIT", "REVERT", "SETUP"};
  * covers the value's range evenly; MASK is 14-bit: its CC (20, 21) the top seven bits, CC 52 / 53 the two below */
 #define CC_MASK1_LSB 52u
 #define CC_MASK2_LSB 53u
+#define CC_FX_SET 54u                    /* FX 1's six settings 54..59, FX 2's 60..65 (a mask: its top seven bits) */
 typedef struct { uint8_t cc; pdesc_t d; } ccmap_t;
 #define C(n, lab, kind, names, lo, hi, f) {n, {lab, kind, names, lo, hi, PO(f)}}
 static const ccmap_t CCMAP[] = {
@@ -398,8 +398,8 @@ static const ccmap_t CCMAP[] = {
     C(12, "SEMI", K_S8, 0, -24, 24, gen.semi), C(5, "PORT", K_U8, 0, 0, 13, gen.port),
     C(8, "PANS", K_U8, 0, 0, 99, gen.pans), C(9, "RATE", K_U8, 0, 0, 99, gen.rate),
     C(13, "BEND", K_U8, 0, 0, 12, gen.bend),
-    C(94, "1TYP", K_FX1, 0, 0, NF1 - 1, fx.t1), C(93, "1BAL", K_U8, 0, 0, 100, fx.b1),
-    C(95, "2TYP", K_FX2, 0, 0, NF2 - 1, fx.t2), C(91, "2BAL", K_U8, 0, 0, 100, fx.b2),
+    C(94, "FX1 TYPE", K_FXT, 0, 0, NEFX - 1, fx.t1), C(93, "FX1 MIX", K_U8, 0, 0, 100, fx.b1),
+    C(95, "FX2 TYPE", K_FXT, 1, 0, NEFX - 1, fx.t2), C(91, "FX2 MIX", K_U8, 0, 0, 100, fx.b2),
     C(88, "ARP", K_NAMES, NAME_ARP, 0, NARPS - 1, arp.type), C(89, "ARP SPD", K_SPD2, 0, 10, 200, arp.spd2),
     C(90, "HOLD", K_U8, NAME_LOOP, 0, 1, arp.hold), C(92, "TRIG", K_U8, NAME_LOOP, 0, 1, arp.trig),
 };
@@ -422,7 +422,7 @@ static int part_channel(uint32_t ch)
 static int cc_mapped(uint32_t cc)            /* (the render's, from MIDI in) */
 {
     int i;
-    if (cc == CC_MASK1_LSB || cc == CC_MASK2_LSB)
+    if (cc == CC_MASK1_LSB || cc == CC_MASK2_LSB || (cc >= CC_FX_SET && cc < CC_FX_SET + 12u))
         return 1;
     for (i = 0; i < NCCMAP; i++)
         if (CCMAP[i].cc == cc)
@@ -436,15 +436,17 @@ static struct {
     int env;                             /* the envelope shown (OSC 1, OSC 2, NOISE, FILTER) */
     int last_osc;                        /* the oscillator ALGORITHM turns: 0 / 1 */
     int edit_sel, edit_lfo;              /* where SEL and LFO and EDIT went last */
+    int fx_slot;                         /* the FX page's slot shown last */
     int w_slot, w_cur, w_act;            /* WRITE: the user slot, the name's cursor, the action */
     char msg[2][28];
     uint32_t msg_until;
+    uint32_t pick_until;                 /* the list of effects, after TYPE turned */
     uint32_t keys, btn;
     uint8_t prs[NKEYS];
     int pending_prog;                    /* PRESETS turned: loaded when it rests a moment; -1 none */
     uint32_t prog_turned;
-    float wave[2][120];                  /* the masks drawn */
-    float wave_m[2];
+    float wave[4][120];                  /* the masks drawn: the oscillators', the effects' */
+    float wave_m[4];
     uint8_t redraw;
     uint32_t meter_t;
 } ui;
@@ -480,6 +482,8 @@ static int sec_rows(int s)
         return 2 * MQ_MTX_ROWS;           /* each row of the matrix two rows of knobs */
     if (s == SEC_LOOPER)
         return 1;
+    if (s == SEC_FX)
+        return 4;                         /* FX 1's two rows, FX 2's: TYPE MIX and two settings, then four */
     if (ui.env && s >= SEC_OSC1 && s <= SEC_FILTER)
         return 2;
     return ROWS[s][1][0].label ? 2 : 1;
@@ -522,6 +526,26 @@ static const pdesc_t *row_desc(int s, int r)
     }
     if (s == SEC_LOOPER)
         return empty;
+    if (s == SEC_FX) {                    /* slot r / 2: TYPE MIX and its first two settings, then the other four */
+        static pdesc_t f[4][4];
+        int sl = r / 2 & 1, t = sl ? cur.fx.t2 : cur.fx.t1, k0 = r & 1 ? 2 : -2, k;
+        const uint8_t *p = sl ? cur.fx.p2 : cur.fx.p1;
+        pdesc_t *x = f[r & 3];
+        for (k = 0; k < 4; k++) {
+            mq_fxk_t d;
+            int j = k0 + k;
+            if (j == -2)
+                x[k] = (pdesc_t){"TYPE", K_FXT, (uint8_t)sl, 0, NEFX - 1, sl ? PO(fx.t2) : PO(fx.t1)};
+            else if (j == -1)
+                x[k] = (pdesc_t){"MIX", K_U8, 0, 0, 100, sl ? PO(fx.b2) : PO(fx.b1)};
+            else if (masque_fx_knob(t, j, p, &d))
+                x[k] = (pdesc_t){d.label, K_FXP, (uint8_t)(sl * 8 + j), d.lo, d.hi,
+                                 (uint16_t)((sl ? PO(fx.p2) : PO(fx.p1)) + d.at)};
+            else
+                x[k] = (pdesc_t)NONE;
+        }
+        return x;
+    }
     if (ui.env && s >= SEC_OSC1 && s <= SEC_FILTER)
         return ENVROWS[s - SEC_OSC1][r];
     return ROWS[s][r];
@@ -570,6 +594,7 @@ static int pget(const pdesc_t *d)
     switch (d->kind) {
     case K_S8: return *(const int8_t *)b;
     case K_U16: return *(const uint16_t *)(const void *)b;
+    case K_FXP: return d->hi > 255 ? b[0] | b[1] << 8 : d->lo < 0 ? *(const int8_t *)b : *b;   /* a mask: two bytes */
     case K_GLOB: return glob_get(d->names);
     case K_NONE: return 0;
     default: return *b;
@@ -582,6 +607,25 @@ static void pset(const pdesc_t *d, int v)
     switch (d->kind) {
     case K_S8: *(int8_t *)b = (int8_t)v; break;
     case K_U16: *(uint16_t *)(void *)b = (uint16_t)v; break;
+    case K_FXP:
+        b[0] = (uint8_t)v;
+        if (d->hi > 255)
+            b[1] = (uint8_t)(v >> 8);
+        break;
+    case K_FXT: {                        /* a new effect: its own settings; past one the other slot's rules out */
+        int old = *b, other = d->names ? cur.fx.t1 : cur.fx.t2, dir = v > old ? 1 : -1;
+        while (v != old && !masque_fx_allowed(v, other)) {
+            v += dir;
+            if (v < 0 || v >= NEFX)
+                v = old;
+        }
+        if (v != old) {
+            *b = (uint8_t)v;
+            masque_fx_defaults(v, d->names ? cur.fx.p2 : cur.fx.p1);
+            ui.pick_until = plat_ms() + 1500u;   /* the list of effects shows a moment */
+        }
+        break;
+    }
     case K_GLOB: glob_set(d->names, v); return;
     case K_NONE: return;
     default: *b = (uint8_t)v; break;
@@ -589,10 +633,24 @@ static void pset(const pdesc_t *d, int v)
     sound_changed();
 }
 
+static const pdesc_t *fx_knob_desc(int sl, int k)   /* slot sl's setting k, as the FX page has it */
+{
+    return &row_desc(SEC_FX, sl * 2 + (k < 2 ? 0 : 1))[k < 2 ? k + 2 : k - 2];
+}
+
 static uint8_t mask_msb[2], mask_lsb[2];
 static void cc_apply(uint32_t cc, int v)     /* main loop: a CC of the map came in */
 {
     int i;
+    if (cc >= CC_FX_SET && cc < CC_FX_SET + 12u) {   /* an effect's settings: FX 1's on 54..59, FX 2's on 60..65 */
+        const pdesc_t *d = fx_knob_desc((int)(cc - CC_FX_SET) / 6, (int)(cc - CC_FX_SET) % 6);
+        if (d && d->label) {
+            int n = d->hi - d->lo + 1;
+            pset(d, d->hi > 255 ? v * 4 : d->lo + v * n / 128);   /* a mask: its top seven bits */
+            ui.redraw = 1;
+        }
+        return;
+    }
     if (cc == CC_MASK1_LSB || cc == CC_MASK2_LSB) {
         int o = cc == CC_MASK2_LSB;
         mask_lsb[o] = (uint8_t)v;
@@ -625,6 +683,14 @@ static void cc_send_value(const pdesc_t *d)
 {
     uint32_t ch = set.glob.midi >= 1 && set.glob.midi <= 16 ? set.glob.midi - 1u : 0u;
     int i;
+    if (d->kind == K_FXP) {
+        int n = d->hi - d->lo + 1, val = pget(d) - d->lo;
+        uint32_t v = d->hi > 255 ? (uint32_t)val >> 2 : (uint32_t)((val * 128 + n - 1) / n);
+        plat_midi_send(0x0Bu | (0xB0u | ch) << 8 | (CC_FX_SET + (uint32_t)(d->names / 8 * 6 + d->names % 8)) << 16 |
+                           (v > 127u ? 127u : v) << 24,
+                       TO_USB);
+        return;
+    }
     for (i = 0; i < NCCMAP; i++) {
         const pdesc_t *m = &CCMAP[i].d;
         uint32_t v;
@@ -670,6 +736,24 @@ static void patch_clamp(mq_patch_t *p)
                     }
                 }
             }
+    if (keep->fx.t1 >= NEFX) keep->fx.t1 = E_OFF;   /* the effects: known, allowed together, their settings in range */
+    if (keep->fx.t2 >= NEFX || !masque_fx_allowed(keep->fx.t2, keep->fx.t1)) keep->fx.t2 = E_OFF;
+    if (keep->fx.b1 > 100) keep->fx.b1 = 100;
+    if (keep->fx.b2 > 100) keep->fx.b2 = 100;
+    for (r = 0; r < 4; r++) {
+        const pdesc_t *d = row_desc(SEC_FX, r);
+        for (k = 0; k < 4; k++)
+            if (d[k].kind == K_FXP) {
+                int v = pget(&d[k]);
+                if (v < d[k].lo || v > d[k].hi) {
+                    uint8_t *b = (uint8_t *)keep + d[k].off;
+                    v = clamp(v, d[k].lo, d[k].hi);
+                    b[0] = (uint8_t)v;
+                    if (d[k].hi > 255)
+                        b[1] = (uint8_t)(v >> 8);
+                }
+            }
+    }
     for (r = 0; r < 2 * MQ_MTX_ROWS; r++) {   /* the matrix's rows */
         const pdesc_t *d = row_desc(SEC_MATRIX, r);
         for (k = 0; k < 4; k++) {
@@ -704,8 +788,14 @@ static void value_text(const pdesc_t *d, int v, char *t)
     t[0] = 0;
     switch (d->kind) {
     case K_NAMES: text_cat(t, masque_name_of(d->names, v)); break;
-    case K_FX1: masque_fx_name(1, v, t); break;
-    case K_FX2: masque_fx_name(2, v, t); break;
+    case K_FXT: text_cat(t, masque_fx_short(v)); break;
+    case K_FXP: {
+        int sl = d->names / 8;
+        mq_fxk_t x;
+        if (masque_fx_knob(sl ? cur.fx.t2 : cur.fx.t1, d->names % 8, sl ? cur.fx.p2 : cur.fx.p1, &x))
+            masque_fx_text(&x, v, t);
+        break;
+    }
     case K_SPD2: int_text(2 * v, t); break;
     case K_S8:
         if (d->lo < 0) signed_text(v, t);
@@ -837,7 +927,7 @@ static void knob(int k, int32_t e)
         int v = pget(d), lo = d->lo;
         if (ui.env && ui.sec == SEC_FILTER && ui.row == 0 && k == 0)
             lo = -99;                      /* the filter envelope's level: its amount, either way */
-        if (d->kind == K_U16 && (e > 2 || e < -2))
+        if ((d->kind == K_U16 || (d->kind == K_FXP && d->hi > 255)) && (e > 2 || e < -2))
             e *= 4;                        /* a quick turn of a mask goes four at a time */
         v = clamp(v + e, lo, d->hi);
         if (lo != d->lo) {                 /* (pset clamps to the descriptor's range) */
@@ -962,7 +1052,13 @@ static void button(uint32_t k, uint32_t btn)
         ui.edit_lfo = ui.sec - SEC_LFO1;
         break;
     case B_EDIT: go(ui.sec == SEC_PITCH ? SEC_MATRIX : ui.sec == SEC_MATRIX ? SEC_GENERAL : SEC_PITCH, 0, 1); break;
-    case B_FX: go(SEC_FX, 0, 1); break;
+    case B_FX: {                         /* FX 1 <-> FX 2 */
+        int sl = ui.sec == SEC_FX ? !(ui.row / 2) : ui.fx_slot;
+        ui.fx_slot = sl;
+        go(SEC_FX, sl * 2, 0);
+        app_say(sl ? "FX 2" : "FX 1", masque_fx_long(sl ? cur.fx.t2 : cur.fx.t1));
+        break;
+    }
     case B_GLO: go(ui.sec == SEC_GLOBAL ? SEC_TUNING : SEC_GLOBAL, 0, 1); break;
     case B_ARP:
         if (ui.sec == SEC_ARP) {         /* on the ARP page: ARP latches (HOLD) */
@@ -1218,12 +1314,22 @@ static void draw_lfo(int i)
     }
 }
 
+static int has_lower(const char *t)   /* (the big faces have capitals only: units like Hz and ms take the small one) */
+{
+    for (; *t; t++)
+        if (*t >= 'a' && *t <= 'z')
+            return 1;
+    return 0;
+}
+
 static void draw_cells(void)
 {
-    int r, k, rows = sec_rows(ui.sec);
+    int r, k, rows = sec_rows(ui.sec), base = 0;
+    if (rows > 2)                          /* two rows shown: the matrix's pair, else the row and the one before */
+        base = ui.sec == SEC_MATRIX || ui.sec == SEC_FX ? ui.row & ~1 : clamp(ui.row - 1, 0, rows - 2);
     for (r = 0; r < 2; r++) {
-        const pdesc_t *d = r < rows ? row_desc(ui.sec, r) : 0;
-        int32_t y = 124 + r * 58, act = r == ui.row;
+        const pdesc_t *d = base + r < rows ? row_desc(ui.sec, base + r) : 0;
+        int32_t y = 124 + r * 58, act = base + r == ui.row;
         if (act)
             cv_rect(0, y - 2, 240, 56, C_HL);
         for (k = 0; k < 4; k++) {
@@ -1239,13 +1345,13 @@ static void draw_cells(void)
                 else text_cat(t, ACTIONS[ui.w_act]);
             } else {
                 int v = pget(&d[k]);
-                if (ui.env && ui.sec == SEC_FILTER && r == 0 && k == 0)
+                if (ui.env && ui.sec == SEC_FILTER && base + r == 0 && k == 0)
                     signed_text(cur.filt.env.l, t);
                 else
                     value_text(&d[k], v, t);
             }
             text_c(cx, y + 2, &FONT_XS, d[k].label, act ? C_LBL : C_DIMT);
-            text_c(cx, y + 20, text_w(&FONT_M, t) > 58 ? &FONT_S : &FONT_M, t, act ? C_RED : C_REDD);
+            text_c(cx, y + 20, text_w(&FONT_M, t) > 58 || has_lower(t) ? &FONT_S : &FONT_M, t, act ? C_RED : C_REDD);
             if (act)
                 text_c(cx, y + 46, &FONT_T, k == 0 ? "K1" : k == 1 ? "K2" : k == 2 ? "K3" : "K4", C_DIMT);
         }
@@ -1278,6 +1384,19 @@ static void draw_header(void)
         cv_rect(0, 26, 240, 20, C_BG);
         x = cv_text(8, 28, &FONT_B, ui.msg[0], C_WHT);
         cv_text(x + 8, 28, &FONT_B, ui.msg[1], C_RED);
+    } else if (ui.sec == SEC_FX) {       /* the two slots as tabs; the tempo when the effect follows it */
+        int sl = ui.row / 2, k;
+        for (k = 0; k < 2; k++) {
+            int32_t x = 8 + k * 44, w = text_w(&FONT_B, k ? "FX 2" : "FX 1");
+            cv_text(x, 28, &FONT_B, k ? "FX 2" : "FX 1", k == sl ? C_RED : C_DIMT);
+            if (k == sl)
+                cv_rect(x, 45, w, 2, C_RED);
+        }
+        if (masque_fx_synced(sl ? cur.fx.t2 : cur.fx.t1, sl ? cur.fx.p2 : cur.fx.p1)) {
+            int_text((int)(m->bpm + 0.5f), t);
+            text_cat(t, " BPM");
+            cv_text(232 - text_w(&FONT_XS, t), 31, &FONT_XS, t, C_DIMT);
+        }
     } else {
         int32_t x;
         t[0] = 0;
@@ -1298,6 +1417,149 @@ static void draw_header(void)
             cv_text(180, 28, &FONT_XS, "LOOP", C_RED);
         if (m->arp_on)
             cv_text(212, 28, &FONT_XS, "ARP", C_RED);
+    }
+}
+
+/* the FX page: the effect's name, and a picture of what it does with its settings */
+static void draw_fx(void)
+{
+    int sl = ui.row / 2, t = sl ? cur.fx.t2 : cur.fx.t1, i, k;
+    const uint8_t *p = sl ? cur.fx.p2 : cur.fx.p1;
+    const char *nm = masque_fx_long(t);
+    int32_t y0 = 88, y1 = 116, ym = (y0 + y1) / 2;
+    uint16_t c = C_RED, cd = C_REDD;
+    ui.fx_slot = sl;
+    text_c(120, 48, text_w(&FONT_L, nm) < 228 ? &FONT_L : &FONT_M, nm, t ? C_RED : C_REDDD);
+    switch (t) {
+    case E_CHORUS: case E_TREM: case E_RING: {   /* the LFO(s) */
+        int nv = t == E_CHORUS ? clamp(p[2], 1, 3) : t == E_TREM ? 2 : 1;
+        float cyc = t == E_RING ? 6.0f : 1.0f + (float)p[0] / 40.0f, dep = (float)p[1] / 99.0f;
+        float spr = t == E_TREM ? (float)p[4] / 198.0f : 0.0f;
+        for (k = 0; k < nv; k++) {
+            int32_t px = 0, py = 0;
+            for (i = 0; i < 200; i++) {
+                float ph = (float)i / 200.0f * cyc + (t == E_TREM ? (k ? spr : 0.0f) : (float)k / (float)nv), v;
+                int32_t yy;
+                v = fm_sinf(FM_TWO_PI * ph);
+                if (t == E_RING)           /* a signal, times the carrier */
+                    v *= (1.0f - dep) + dep * fm_sinf(FM_TWO_PI * (float)i / 200.0f * 30.0f);
+                else if (t == E_TREM && p[3])
+                    v = fm_tanhf(v * (1.0f + 8.0f * (float)p[3] / 99.0f));
+                yy = ym - (int32_t)(v * (t == E_RING ? 13.0f : 13.0f * (0.25f + 0.75f * dep)));
+                if (i) cv_line(px, py, 20 + i, yy, k ? cd : c);
+                px = 20 + i;
+                py = yy;
+            }
+        }
+        break;
+    }
+    case E_FLANGER: case E_PHASER: {   /* the notches across the spectrum */
+        float teeth = t == E_PHASER ? (float)p[4] : 2.0f + (float)(99 - p[4]) / 8.0f;
+        float off = t == E_PHASER ? (float)p[5] / 99.0f : 0.0f;
+        int32_t px = 0, py = 0;
+        for (i = 0; i < 200; i++) {
+            float x = (float)i / 200.0f, v = 0.5f + 0.5f * fm_cosf(FM_TWO_PI * (x * teeth - off * teeth));
+            int32_t yy = y1 - (int32_t)(v * 26.0f);
+            if (i) cv_line(px, py, 20 + i, yy, c);
+            px = 20 + i;
+            py = yy;
+        }
+        break;
+    }
+    case E_DIST: case E_FOLD: {   /* the curve: the input across, the output up */
+        float g = t == E_DIST ? fm_exp2f((float)p[0] / 99.0f * 7.0f) : fm_exp2f((float)p[0] / 99.0f * 4.0f);
+        float bias = t == E_DIST ? 0.8f * (float)p[3] / 99.0f : (float)p[1] / 99.0f, nrm = t == E_DIST ? 1.0f : 1.0f;
+        int32_t px = 0, py = 0;
+        cv_rect(60, ym, 120, 1, C_REDDD);
+        cv_rect(120, y0, 1, y1 - y0, C_REDDD);
+        for (i = 0; i <= 120; i++) {
+            float x = ((float)i / 60.0f - 1.0f), z = x * g + bias, v;
+            int32_t yy;
+            if (t == E_FOLD) v = fm_sinf(1.5707963f * z);
+            else switch (p[2] & 3) {
+                case 1: { float q = 1.5f * z; q = q > 1.5f ? 1.5f : q < -1.5f ? -1.5f : q; v = 0.6667f * (q - 0.1481481f * q * q * q); break; }
+                case 2: v = z > 0.0f ? fm_tanhf(z) : 0.7f * fm_tanhf(1.4f * z); break;
+                case 3: v = fm_tanhf(3.0f * z + 0.4f * z * z); break;
+                default: v = fm_tanhf(z); break;
+            }
+            yy = ym - (int32_t)(v * nrm * 13.0f);
+            if (i) cv_line(px, py, 60 + i, yy, c);
+            px = 60 + i;
+            py = yy;
+        }
+        break;
+    }
+    case E_CRUSH: {   /* a sine, its levels and its samples held */
+        int bits = clamp(p[0], 1, 16), steps = 1 << (bits > 5 ? 5 : bits);
+        int hold = 1 + (int)(fm_exp2f((float)p[1] / 99.0f * 5.0f)) / 2;
+        int32_t px = 0, py = 0;
+        for (i = 0; i < 200; i++) {
+            int j = i - i % hold;
+            float v = fm_sinf(FM_TWO_PI * (float)j / 200.0f * 2.0f);
+            int32_t yy;
+            v = fm_floorf(v * (float)(steps / 2) + 0.5f) / (float)(steps / 2 > 0 ? steps / 2 : 1);
+            yy = ym - (int32_t)(v * 13.0f);
+            if (i) cv_line(px, py, 20 + i, yy, c);
+            px = 20 + i;
+            py = yy;
+        }
+        break;
+    }
+    case E_SHAPER: case E_SLICER:   /* the mask: the shaper's curve; the order the slicer plays the window in */
+        draw_wave(20, y0 - 2, 200, y1 - y0 + 4, 2 + sl, (float)(p[0] | p[1] << 8), c);
+        break;
+    case E_DELAY: {   /* the repeats, left and right */
+        float h = 14.0f, fb = 0.97f * (float)p[1] / 99.0f;
+        int pp = p[3] != 0;
+        int32_t x = 24, dx = p[2] ? 12 + 2 * p[6] : 10 + p[0] / 3;
+        cv_rect(20, ym, 200, 1, C_REDDD);
+        for (k = 0; k < 12 && x < 216 && h >= 1.0f; k++) {
+            int up = !pp || !(k & 1);
+            int32_t hh = (int32_t)h;
+            if (up) cv_rect(x, ym - hh, 5, hh, k ? cd : c);
+            if (!up || !pp) cv_rect(x + (pp ? 0 : 0), ym + 1, 5, pp ? hh : hh * 3 / 4, k ? cd : c);
+            x += dx;
+            h = k ? h * fb : h * 0.9f;
+        }
+        break;
+    }
+    case E_PLATE: {   /* the tail */
+        float dec = 0.2f * fm_exp2f((float)p[1] / 16.9f), len = 30.0f + 170.0f * fm_log2f(1.0f + dec) / 3.6f;
+        uint32_t r = 12345u;
+        int32_t pre = 20 + p[3] / 3;
+        for (i = 0; i < 90; i++) {
+            float x = (float)(i * 2), a;
+            int32_t hh;
+            if (x > len) break;
+            r = r * 1664525u + 1013904223u;
+            a = fm_expf(-3.0f * x / len) * (0.55f + 0.45f * (float)(r >> 24) / 255.0f);
+            hh = (int32_t)(a * 26.0f);
+            cv_rect(pre + (int32_t)x, y1 - hh, 1, hh, i < 3 ? c : cd);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+static void draw_picker(void)   /* the effects as a list while TYPE turns */
+{
+    int sl = ui.row / 2, t = sl ? cur.fx.t2 : cur.fx.t1, other = sl ? cur.fx.t1 : cur.fx.t2, i, top;
+    cv_rect(0, 48, 240, 192, C_BG);
+    cv_text(232 - text_w(&FONT_XS, "TYPE"), 31, &FONT_XS, "TYPE", C_DIMT);
+    top = clamp(t - 2, 0, NEFX - 6);
+    for (i = 0; i < 6 && top + i < NEFX; i++) {
+        int e = top + i, ok = masque_fx_allowed(e, other);
+        int32_t y = 54 + i * 31;
+        if (e == t) {
+            cv_rect(0, y - 3, 240, 30, C_HL);
+            cv_text(16, y, &FONT_M, masque_fx_long(e), C_RED);
+        } else {
+            cv_text(16, y + 5, &FONT_S, masque_fx_long(e), ok ? C_REDD : C_REDDD);
+            if (!ok)
+                cv_text(232 - text_w(&FONT_XS, "IN USE"), y + 7, &FONT_XS, "IN USE", C_REDDD);
+        }
     }
 }
 
@@ -1363,17 +1625,9 @@ static void draw_visual(void)
     case SEC_LFO2:
         draw_lfo(ui.sec - SEC_LFO1);
         break;
-    case SEC_FX: {
-        char a[8], b[8];
-        masque_fx_name(1, cur.fx.t1, a);
-        masque_fx_name(2, cur.fx.t2, b);
-        text_c(66, 60, &FONT_L, a, cur.fx.t1 ? C_RED : C_REDDD);
-        text_c(174, 60, &FONT_L, b, cur.fx.t2 ? C_RED : C_REDDD);
-        cv_text(48, 96, &FONT_XS, "FX1", C_DIMT);
-        cv_text(156, 96, &FONT_XS, "FX2", C_DIMT);
-        cv_rect(120, 54, 1, 52, C_REDDD);
+    case SEC_FX:
+        draw_fx();
         break;
-    }
     case SEC_ARP:
         text_c(120, 56, &FONT_L, masque_name_of(NAME_ARP, cur.arp.type), cur.arp.type ? C_RED : C_REDDD);
         int_text(2 * cur.arp.spd2, t);
@@ -1588,8 +1842,12 @@ static void draw(void)
         cv_y0 = 0;
         cv_y1 = 120;
         draw_header();
-        draw_visual();
-        draw_cells();
+        if (ui.sec == SEC_FX && plat_ms() < ui.pick_until) {
+            draw_picker();
+        } else {
+            draw_visual();
+            draw_cells();
+        }
         cv_blit(0, 120u * half);
     }
 }
@@ -1616,7 +1874,7 @@ void app_ui_init(void)
 {
     touch_on(1);
     ui.pending_prog = -1;
-    ui.wave_m[0] = ui.wave_m[1] = -1.0f;
+    ui.wave_m[0] = ui.wave_m[1] = ui.wave_m[2] = ui.wave_m[3] = -1.0f;
     lcd_fill(0, 0, 240, 240, C_BG);
     ui.redraw = 1;
 }
@@ -1631,6 +1889,10 @@ void app_frame(void)
     speak();
     if (ui.msg_until && now >= ui.msg_until) {
         ui.msg_until = 0;
+        ui.redraw = 1;
+    }
+    if (ui.pick_until && now >= ui.pick_until) {
+        ui.pick_until = 0;
         ui.redraw = 1;
     }
     if (now - ui.meter_t >= 40u) {       /* the live masks and the voices, 25 a second */
@@ -1692,6 +1954,12 @@ int app_expect(const char *what, int *got)
         *got = (int)m->voices;
     else if (!strcmp(what, "loop"))
         *got = m->loop_state;
+    else if (!strcmp(what, "fx1") || !strcmp(what, "fx2"))
+        *got = what[2] == '1' ? cur.fx.t1 : cur.fx.t2;
+    else if (!strncmp(what, "fx", 2) && what[3] == 's' && what[4] >= '1' && what[4] <= '6')   /* fx1s1: a setting */
+        *got = pget(fx_knob_desc(what[2] - '1', what[4] - '1'));
+    else if (!strcmp(what, "fx1mix") || !strcmp(what, "fx2mix"))
+        *got = what[2] == '1' ? cur.fx.b1 : cur.fx.b2;
     else if (!strcmp(what, "arp"))
         *got = cur.arp.type;
     else if (!strcmp(what, "edited"))

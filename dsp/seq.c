@@ -36,6 +36,8 @@ static struct {
     uint32_t rng;
     uint32_t clocks, clock_seen;           /* MIDI clock: pulses, and when the last came (blocks ago) */
     int ext;
+    uint32_t samp, beat_at, pulses;        /* samples counted, at the last beat of MIDI clock, its pulses */
+    float ext_bpm;                         /* the tempo MIDI clock keeps */
 } A;
 
 static uint8_t phys[128];                  /* keys down as played (live or from the loop): their velocities */
@@ -409,7 +411,18 @@ void seq_clock(int what)
 {
     if (what == 0xF8) {
         A.clock_seen = 0;
+        if (!A.ext) {
+            A.pulses = 0;
+            A.beat_at = A.samp;
+        }
         A.ext = 1;
+        if (++A.pulses >= 24u) {           /* a beat: its length, the tempo (eased, the blocks make it jitter) */
+            float b = 60.0f * FS / (float)(A.samp - A.beat_at + 1u);
+            if (b > 20.0f && b < 400.0f)
+                A.ext_bpm = A.ext_bpm > 0.0f ? A.ext_bpm + 0.5f * (b - A.ext_bpm) : b;
+            A.pulses = 0;
+            A.beat_at = A.samp;
+        }
         if (A.type != AR_NONE && A.n && ++A.clocks >= 6u) {   /* a sixteenth every six pulses */
             A.clocks = 0;
             arp_step();
@@ -422,6 +435,11 @@ void seq_clock(int what)
 }
 
 int seq_held_count(void) { return nphys; }
+
+float seq_tempo(void)                      /* MIDI clock's tempo when it runs, else the arpeggio's */
+{
+    return A.ext && A.ext_bpm > 0.0f ? A.ext_bpm : A.bpm;
+}
 
 void seq_set(const mq_patch_t *p)
 {
@@ -471,6 +489,7 @@ void seq_set(const mq_patch_t *p)
 
 void seq_block(uint32_t n)
 {
+    A.samp += n;
     /* the loop's events in this block */
     if (L.state == LS_RECORDING) {
         L.pos += n;
@@ -518,6 +537,7 @@ void seq_meter(mq_meter_t *m)
     m->loop_len_ms = (uint32_t)((float)L.len * (1000.0f / FS));
     m->loop_pos_ms = (uint32_t)((float)L.pos * (1000.0f / FS));
     m->arp_on = A.type != AR_NONE;
+    m->bpm = seq_tempo();
 }
 
 void seq_panic(void)

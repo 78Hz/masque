@@ -144,21 +144,18 @@ void plate_init(void)
     plate_clear();
 }
 
-/* the sixteen plates: small and short to large and long */
-void plate_variant(int v)
+/* the plate's four settings from the FX page: SIZE 30..129 %, DECAY 0.2..12 s, DAMP 1..10 kHz, PREDLY 0..99 ms */
+void plate_settings(int size, int decay, int damp, int pre)
 {
-    static const uint8_t SZ[16] = {35, 45, 55, 60, 70, 75, 80, 90, 95, 100, 105, 110, 115, 120, 125, 130};
-    static const uint8_t DC[16] = {5, 7, 9, 12, 14, 17, 20, 24, 28, 33, 40, 48, 58, 70, 85, 110};
-    static const uint8_t DM[16] = {80, 70, 75, 60, 65, 55, 60, 50, 55, 45, 50, 40, 45, 35, 40, 30};
     plate_params_t q;
-    if (v < 0) v = 0;
-    if (v > 15) v = 15;
+    float dec = 0.2f * fm_exp2f((float)decay / 16.9f);
     plate_defaults(&q);
-    q.size_pc = SZ[v];
-    q.decay_ds = DC[v];
-    q.damp_k10 = DM[v];
-    q.predelay_ms = (uint8_t)(4 + 2 * v);
-    if (q.size_pc != P.want.size_pc || q.decay_ds != P.want.decay_ds || q.damp_k10 != P.want.damp_k10) {
+    q.size_pc = (uint8_t)(30 + (size < 0 ? 0 : size > 99 ? 99 : size));
+    q.decay_ds = (uint8_t)(dec * 10.0f < 2.0f ? 2.0f : dec * 10.0f > 120.0f ? 120.0f : dec * 10.0f);
+    q.damp_k10 = (uint8_t)(10 + 90 * (damp < 0 ? 0 : damp > 99 ? 99 : damp) / 99);
+    q.predelay_ms = (uint8_t)(pre < 0 ? 0 : pre > 99 ? 99 : pre);
+    if (q.size_pc != P.want.size_pc || q.decay_ds != P.want.decay_ds || q.damp_k10 != P.want.damp_k10 ||
+        q.predelay_ms != P.want.predelay_ms) {
         P.want = q;
         P.pending = 1;
     }

@@ -1360,30 +1360,28 @@ static int finite_bounded(const float *x, uint32_t n)
     return 1;
 }
 
-static void fx_mods(fx_ctl_t *c)           /* the effects' type and balance, after the LFOs and the controllers */
+static void fx_mods(fx_ctl_t *c)           /* the effects' settings and mixes, after the LFOs and the matrix: FX MOD
+                                            * moves an effect's first setting */
 {
-    float t1 = 0.0f, t2 = 0.0f, b1 = (float)P.fx.b1 / 100.0f, b2 = (float)P.fx.b2 / 100.0f;
+    float m1 = S.gx[XD_FX1MOD], m2 = S.gx[XD_FX2MOD], b1 = (float)P.fx.b1 / 100.0f, b2 = (float)P.fx.b2 / 100.0f;
     int i;
     for (i = 0; i < 2; i++) {
         float x = S.lval[i][0];
-        if (P.lfo[i].dest == LD_FX1TYP) t1 += x * 8.0f;
-        if (P.lfo[i].dest == LD_FX2TYP) t2 += x * 8.0f;
+        if (P.lfo[i].dest == LD_FX1MOD) m1 += x;
+        if (P.lfo[i].dest == LD_FX2MOD) m2 += x;
         if (P.lfo[i].dest == LD_FX2BAL) b2 += x * 0.5f;
     }
     b1 += S.gx[XD_FX1BAL];
     b2 += S.gx[XD_FX2BAL];
-    c->b1 = fm_clampf(b1, 0.0f, 1.0f);
-    c->b2 = fm_clampf(b2, 0.0f, 1.0f);
-    c->t1 = P.fx.t1;
-    c->t2 = P.fx.t2;
-    if (P.fx.t1 && t1 != 0.0f) {            /* moved within its family, never out of it */
-        int fam = (P.fx.t1 - 1) / 16, var = (P.fx.t1 - 1) % 16 + (int)(t1 + (t1 > 0 ? 0.5f : -0.5f));
-        c->t1 = 1 + fam * 16 + (var < 0 ? 0 : var > 15 ? 15 : var);
-    }
-    if (P.fx.t2 && t2 != 0.0f) {
-        int fam = (P.fx.t2 - 1) / 16, var = (P.fx.t2 - 1) % 16 + (int)(t2 + (t2 > 0 ? 0.5f : -0.5f));
-        c->t2 = 1 + fam * 16 + (var < 0 ? 0 : var > 15 ? 15 : var);
-    }
+    c->mix[0] = fm_clampf(b1, 0.0f, 1.0f);
+    c->mix[1] = fm_clampf(b2, 0.0f, 1.0f);
+    c->t[0] = P.fx.t1;
+    c->t[1] = P.fx.t2;
+    memcpy(c->p[0], P.fx.p1, MQ_FX_P);
+    memcpy(c->p[1], P.fx.p2, MQ_FX_P);
+    c->mod[0] = fm_clampf(m1, -1.0f, 1.0f);
+    c->mod[1] = fm_clampf(m2, -1.0f, 1.0f);
+    c->bpm = seq_tempo();
 }
 
 void masque_render(float *l, float *r, uint32_t n)

@@ -24,7 +24,7 @@ enum { PM_POLY, PM_MONO, PM_SLUR, PM_MONO_PORTA, PM_PARA, PM_MOLY, PM_PARA_SLUR,
 enum { LW_SIN, LW_SQR, LW_UP, LW_DOWN, LW_SAWS, LW_STEP, LW_HSIN, LW_RAND, NLWAVES };
 /* the LFOs' destinations (16) */
 enum { LD_FREQ, LD_VOL, LD_FILT, LD_MASK, LD_PAN, LD_O1FREQ, LD_O1VOL, LD_O1MASK, LD_O2FREQ, LD_O2VOL, LD_O2MASK,
-       LD_NFREQ, LD_NVOL, LD_FX1TYP, LD_FX2TYP, LD_FX2BAL, NLDESTS };
+       LD_NFREQ, LD_NVOL, LD_FX1MOD, LD_FX2MOD, LD_FX2BAL, NLDESTS };
 /* the modulation matrix's sources: the note's own (velocity, release velocity, pressure, timbre (MPE's CC74), its
  * bend, its key, a random value per note, the filter envelope), the part's (channel aftertouch, the mod wheel, the
  * LFOs) and any CC (XS_CC0 + n) */
@@ -33,16 +33,20 @@ enum { XS_NONE, XS_VEL, XS_REL, XS_PRESS, XS_AT, XS_TIMBRE, XS_BEND, XS_WHEEL, X
 /* its destinations: the voice's, then the part's (from XD_L1AMT: they follow the last note) */
 enum { XD_NONE, XD_PITCH, XD_O1PITCH, XD_O2PITCH, XD_MASK, XD_O1MASK, XD_O2MASK, XD_MSPD, XD_VOL, XD_O1VOL, XD_O2VOL,
        XD_NVOL, XD_NFREQ, XD_CUTF, XD_RESO, XD_DRIVE, XD_FENV, XD_PENV, XD_ATK, XD_REL, XD_PAN, XD_L1AMT, XD_L1SPD,
-       XD_L2AMT, XD_L2SPD, XD_FX1BAL, XD_FX2BAL, NXDEST };
+       XD_L2AMT, XD_L2SPD, XD_FX1BAL, XD_FX2BAL, XD_FX1MOD, XD_FX2MOD, NXDEST };
 enum { XC_LIN, XC_SOFT, XC_HARD, XC_S, XC_BIP, NXCURVE };   /* BIP: the source rests at its middle (a CC at 64) */
 enum { XZ_ALL, XZ_LO, XZ_HI, NXZONE };     /* MPE's zones: the row hears notes of the lower, the upper, or both */
 #define MQ_MTX_ROWS 8
 /* the tunings: an equal division of the octave (its size apart), or a twelve-note temperament (KIST's) */
 enum { TS_EQUAL, TS_WERCKMEISTER3, TS_MEANTONE, TS_KIRNBERGER3, TS_VALLOTTI, NTS };
 #define MQ_MIDI_MPE 17                     /* the part's MIDI: 0 omni, 1..16 one channel, 17 MPE */
-/* FX1: off, then 16 of each family; FX2 the same */
-enum { F1_OFF, F1_CH = 1, F1_DT = 17, F1_BC = 33, F1_RM = 49, NF1 = 65 };
-enum { F2_OFF, F2_DL = 1, F2_RV = 17, F2_DT = 33, NF2 = 49 };
+/* the effects: either slot takes any of them, but one of each, and one of those that need the long delay line (the
+ * delay, the mask slicer) at a time (masque_fx_allowed) */
+enum { E_OFF, E_CHORUS, E_FLANGER, E_PHASER, E_DIST, E_FOLD, E_CRUSH, E_RING, E_TREM, E_SHAPER, E_DELAY, E_PLATE,
+       E_SLICER, NEFX };
+#define MQ_FX_P 8                          /* an effect's settings, as bytes (a mask takes two) */
+#define MQ_FX_K 6                          /* its settings on the knobs (two rows: two beside TYPE and MIX, then four) */
+#define MQ_NSYNC 14                        /* the note values a synced time takes: OFF, 1/64 .. 1/2 (dsp/fx.c) */
 /* the arpeggiator's patterns */
 enum { AR_NONE, AR_1OCT, AR_DBL, AR_2OCT, AR_ALT, AR_3OCT, AR_PONG, AR_PON2, AR_PON3, AR_RND, AR_RND2, AR_RND3,
        AR_MIN, AR_MAJ, AR_SUS2, AR_SUS4, AR_7TH, AR_MIN2, AR_MAJ2, AR_SU22, AR_SU42, AR_7TH2, AR_1O, AR_2O, AR_3O,
@@ -82,7 +86,10 @@ typedef struct {
         uint8_t zone;                      /* XZ_* */
     } mtx[MQ_MTX_ROWS];
     struct { uint8_t mode, vol; int8_t semi; uint8_t port, pans, rate, bend, rsv; } gen;
-    struct { uint8_t t1, b1, t2, b2; } fx;  /* types (F1_*, F2_* + variant), balances 0..100 */
+    struct {
+        uint8_t t1, b1, t2, b2;            /* the two slots' effects (E_*), their mix 0..100 */
+        uint8_t p1[MQ_FX_P], p2[MQ_FX_P];  /* their settings (masque_fx_knob); choosing an effect sets them */
+    } fx;
     struct { uint8_t type, spd2, hold, trig; } arp;   /* SPD in 2 BPM steps: 10..200 = 20..400 BPM */
 } mq_patch_t;
 
@@ -104,6 +111,7 @@ typedef struct {
     uint32_t voices, voices_peak, allowed;
     float mask_now[2];                     /* where the last note's masks are now (envelopes, LFOs), for the scope */
     float load;                            /* the render's share of its time, 0..1 */
+    float bpm;                             /* the tempo a synced effect follows (MIDI clock's, else the ARP's) */
     uint32_t sounding[4];                  /* the MIDI notes sounding: bit k % 32 of word k / 32 */
     uint8_t loop_state, arp_on, cpu2;      /* LS_* */
     /* the last note's expression, as the matrix sees it (0..1; bend -1..1), and which of them have come */
@@ -146,4 +154,17 @@ enum { NAME_LOOP, NAME_FMODE, NAME_EXTRA, NAME_PMODE, NAME_LWAVE, NAME_LDEST, NA
        NAME_FX2, NAME_ARP, NAME_VCURVE, NAME_XCURVE, NAME_XZONE, NAME_TS, NAME_MIDI };
 /* the tuning, for the screen: each of the twelve notes' cents from equal temperament (A at 0) */
 void masque_tuning_cents(int system, int root, float out[12]);
-void masque_fx_name(int which, int t, char *out);  /* "CH03", "RV12", "OFF" */
+/* the effects, for the panel: a short name (the TYPE knob's) and the full one (the page's title); whether effect t
+ * may go in a slot beside other (the other slot's); the settings an effect starts from; each knob k (0..MQ_FX_K-1):
+ * its label, range, where its value is in p (two bytes when wide: a mask), and how it reads. A knob can depend on the
+ * others (a synced time shows the note value) */
+const char *masque_fx_short(int t);        /* "CHORUS", "SHAPER", "OFF" */
+const char *masque_fx_long(int t);         /* "CHORUS", "MASK SHAPER" */
+int masque_fx_allowed(int t, int other);
+void masque_fx_defaults(int t, uint8_t p[MQ_FX_P]);
+typedef struct { const char *label; int16_t lo, hi; uint8_t at, wide, unit; } mq_fxk_t;
+int masque_fx_knob(int t, int k, const uint8_t p[MQ_FX_P], mq_fxk_t *d);   /* 0: no knob there */
+int masque_fx_get(const mq_fxk_t *d, const uint8_t p[MQ_FX_P]);
+void masque_fx_set(const mq_fxk_t *d, uint8_t p[MQ_FX_P], int v);
+void masque_fx_text(const mq_fxk_t *d, int v, char *out);
+int masque_fx_synced(int t, const uint8_t p[MQ_FX_P]);   /* its time follows the tempo */

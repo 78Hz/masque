@@ -11,8 +11,8 @@ static const char *const N_PMODE[NPMODES] = {"POLY", "MONO", "SLUR", "MONO PORTA
                                              "MONO RETRIG", "POLY RETRIG"};
 static const char *const N_LWAVE[NLWAVES] = {"SIN", "SQR", "UP", "DOWN", "SAWS", "STEP", "HSIN", "RAND"};
 static const char *const N_LDEST[NLDESTS] = {"FREQ", "VOL", "FILT", "MASK", "PAN", "O1 FREQ", "O1 VOL", "O1 MASK",
-                                             "O2 FREQ", "O2 VOL", "O2 MASK", "N FREQ", "N VOL", "FX1 TYP",
-                                             "FX2 TYP", "FX2 BAL"};
+                                             "O2 FREQ", "O2 VOL", "O2 MASK", "N FREQ", "N VOL", "FX1 MOD",
+                                             "FX2 MOD", "FX2 MIX"};
 static const char *const N_ARP[NARPS] = {"NONE", "1OCT", "DBL", "2OCT", "ALT", "3OCT", "PONG", "PON2", "PON3", "RND",
                                          "RND2", "RND3", "MIN", "MAJ", "SUS2", "SUS4", "7TH", "MIN2", "MAJ2", "SU22",
                                          "SU42", "7TH2", "1O", "2O", "3O", "5TH", "5TH2"};
@@ -22,7 +22,8 @@ static const char *const N_XSRC[XS_CC0] = {"OFF", "VEL", "REL VEL", "PRESS", "AT
 static const char *const N_XDEST[NXDEST] = {"OFF", "PITCH", "O1 PITCH", "O2 PITCH", "MASK", "O1 MASK", "O2 MASK",
                                             "MASK SPD", "VOL", "O1 VOL", "O2 VOL", "N VOL", "N FREQ", "CUTF", "RESO",
                                             "DRIVE", "F ENV", "P ENV", "ATK", "REL", "PAN", "LFO1 AMT", "LFO1 SPD",
-                                            "LFO2 AMT", "LFO2 SPD", "FX1 BAL", "FX2 BAL"};
+                                            "LFO2 AMT", "LFO2 SPD", "FX1 MIX", "FX2 MIX", "FX1 MOD",
+                                            "FX2 MOD"};
 static const char *const N_XCURVE[NXCURVE] = {"LIN", "SOFT", "HARD", "S", "BIP"};
 static const char *const N_XZONE[NXZONE] = {"ALL", "LO", "HI"};
 static const char *const N_TS[NTS] = {"EQUAL", "WERCKM. III", "MEANTONE", "KIRNB. III", "VALLOTTI"};
@@ -72,19 +73,3 @@ const char *masque_name_of(int kind, int v)
 
 void masque_tuning_cents(int system, int root, float out[12]) { tuning_cents(system, root, out); }
 
-void masque_fx_name(int which, int t, char *out)   /* "CH03", "RV12", "OFF" */
-{
-    static const char F1[4][3] = {"CH", "DT", "BC", "RM"}, F2[3][3] = {"DL", "RV", "DT"};
-    int fam, var;
-    if (t <= 0 || (which == 1 && t >= NF1) || (which == 2 && t >= NF2)) {
-        out[0] = 'O'; out[1] = 'F'; out[2] = 'F'; out[3] = 0;
-        return;
-    }
-    fam = (t - 1) / 16;
-    var = (t - 1) % 16 + 1;
-    out[0] = which == 1 ? F1[fam][0] : F2[fam][0];
-    out[1] = which == 1 ? F1[fam][1] : F2[fam][1];
-    out[2] = (char)('0' + var / 10);
-    out[3] = (char)('0' + var % 10);
-    out[4] = 0;
-}

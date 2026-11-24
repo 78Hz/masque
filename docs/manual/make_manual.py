@@ -180,8 +180,8 @@ S.append(table([["", ""],
                 ["Play modes", "POLY, MONO, SLUR, MONO PORTA, PARA, MOLY, PARA SLUR, MONO RETRIG, POLY RETRIG"],
                 ["Arpeggiator", "26 patterns, 20–400 BPM or MIDI clock, HOLD, TRIG"],
                 ["Looper", "one track, up to 4096 events"],
-                ["Effects", "FX1: chorus / flanger / phaser, distortion, bitcrusher, ring mod. FX2: delay, plate "
-                            "reverb, distortion"],
+                ["Effects", "two slots, each any of twelve: chorus, flanger, phaser, distortion, wavefolder, "
+                            "bitcrusher, ring mod, tremolo, mask shaper, delay, plate reverb, mask slicer"],
                 ["Sounds", "40 factory (P00–P39), 128 user (U000–U127), backed up over USB"]][1:],
                [32 * mm, W - 32 * mm], head=False))
 S.append(Spacer(1, 6))
@@ -357,7 +357,8 @@ S.append(knobs([["1", "AMT 0–99", "SPD 0–99 (0.03–30 Hz)", "DEST", "WAVE"]
                 ["2", "DLAY 0–99", "DCAY 0–99", "", ""]]))
 S.append(Spacer(1, 5))
 S.append(P("Free-running, one for the whole part. <b>DEST</b>: FREQ, VOL, FILT, MASK, PAN, O1 FREQ, O1 VOL, "
-           "O1 MASK, O2 FREQ, O2 VOL, O2 MASK, N FREQ, N VOL, FX1 TYP, FX2 TYP, FX2 BAL. <b>WAVE</b>: SIN, SQR, "
+           "O1 MASK, O2 FREQ, O2 VOL, O2 MASK, N FREQ, N VOL, FX1 MOD, FX2 MOD (the effect's first setting, up to 50 "
+           "either way, a mask up to 128), FX2 MIX. <b>WAVE</b>: SIN, SQR, "
            "UP, DOWN, SAWS (two small saws), STEP (four stairs), HSIN (half sines), RAND (sample and hold). "
            "<b>DLAY</b>: after the first key the LFO waits, then fades in (not while the mod wheel or aftertouch "
            "controls its amount or speed). <b>DCAY</b>: it fades out after this long (0 never)."))
@@ -392,8 +393,8 @@ S.append(table([["Destinations", "What"],
                 ["F ENV, P ENV", "the filter and pitch envelopes' depth"],
                 ["ATK, REL", "the envelopes' attack (at the note's start) and release (as it is let go) times"],
                 ["PAN", "the voice's place"],
-                ["LFO1 AMT … FX2 BAL", "the part's: the LFOs' amounts and speeds, the effects' balances, from the "
-                                       "last note played"]],
+                ["LFO1 AMT … FX2 MOD", "the part's: the LFOs' amounts and speeds, the effects' mixes and first "
+                                       "settings (a mask up to 128), from the last note played"]],
                [46 * mm, W - 46 * mm]))
 S.append(Spacer(1, 5))
 S.append(P("<b>LO</b> and <b>HI</b> pick the part of the source's travel that is used. <b>CURVE</b>: LIN straight, "
@@ -416,18 +417,43 @@ S.append(P("<b>PORT</b>: glide time (0 none, 13 very long); the play modes' glid
            "<b>RATE</b>: envelopes faster up the keyboard and slower down it. <b>BEND</b>: pitch-bend range in "
            "semitones. <b>MODE</b>: the play mode (chapter 5)."))
 S.append(P("FX", h2))
-S.append(knobs([["1", "1TYP", "1BAL 0–100", "2TYP", "2BAL 0–100"]]))
+S.append(knobs([["1", "TYPE", "MIX 0–100", "1st setting", "2nd setting"],
+                ["2", "3rd setting", "4th", "5th", "6th"]]))
 S.append(Spacer(1, 5))
-S.append(table([["Type", "What"],
-                ["CH01–CH16", "Chorus; CH11–14 flangers, CH15–16 phasers (FX1)"],
-                ["DT01–DT16", "Distortion, gentle to hard; DT13–16 fold the wave (FX1 and FX2)"],
-                ["BC01–BC16", "Bitcrusher, fewer bits and a lower rate as the number rises; BC09–16 sweep "
-                              "themselves (FX1)"],
-                ["RM01–RM16", "RM01–04 a stereo tremolo, then ring modulation from 30 Hz to 2.5 kHz (FX1)"],
-                ["DL01–DL16", "Delay, 95 ms to 0.7 s, more feedback higher up; the even numbers ping-pong (FX2)"],
-                ["RV01–RV16", "Plate reverb, small and short to large and long (FX2)"]],
-               [28 * mm, W - 28 * mm]))
-S.append(P("The balances run from 0 (dry) to 100 (all effect). FX1 comes before FX2.", small))
+S.append(P("Two effects, one after the other, each on its own page: <b>FX</b> shows FX 1, and pressed again FX 2 "
+           "(the tabs at the top say which). Turning TYPE shows the list of effects for a moment; choosing one sets "
+           "its settings to a starting point, which the sound keeps. MIX is equal power (0 dry, 50 both at full, 100 "
+           "the effect alone). A new effect fades the old one out and starts clean. Either slot takes any effect, "
+           "but two that need the same memory cannot be together: the chorus and the flanger, the delay and the "
+           "mask slicer, two plates (the list marks them IN USE)."))
+S.append(table([["Effect", "Settings"],
+                ["CHORUS", "RATE, DEPTH, VOICES (1–3 a side), SPREAD, DELAY (2–20 ms), LOW CUT (of the wet)"],
+                ["FLANGER", "RATE, DEPTH, FEEDBACK (−99–99), SPREAD, MANUAL (0.1–5 ms), TONE (in the feedback)"],
+                ["PHASER", "RATE, DEPTH, FEEDBACK (−99–99), SPREAD, STAGES (2–12), CENTRE (100 Hz–8 kHz)"],
+                ["DISTORTION", "DRIVE, TONE, CURVE (SOFT, HARD, TUBE, FUZZ), BIAS, LOW CUT, LEVEL; 4x oversampled"],
+                ["WAVEFOLDER", "FOLD (x1–x16), BIAS, TONE, LEVEL; 4x oversampled"],
+                ["BITCRUSHER", "BITS (1–16), RATE (the sample rate), JITTER, TONE"],
+                ["RING MOD", "FREQ (0.3 Hz–1.6 kHz), DEPTH, SPREAD, SHAPE"],
+                ["TREMOLO", "RATE (or a note value), DEPTH, SYNC, SHAPE, SPREAD (99: an auto-pan)"],
+                ["MASK SHAPER", "MASK, DRIVE, BIAS, TONE (below)"],
+                ["DELAY", "TIME (20–740 ms or a note value), FEEDBACK, SYNC, PING-PONG, TONE, WOW (tape)"],
+                ["PLATE REVERB", "SIZE, DECAY (0.2–11 s), DAMP, PRE-DLY (0–99 ms), LOW CUT, WIDTH"],
+                ["MASK SLICER", "MASK, WINDOW (4–720 ms or a note value), SYNC, TONE, FADE (0.1–5 ms) (below)"]],
+               [30 * mm, W - 30 * mm]))
+S.append(P("With SYNC on, TIME (RATE, WINDOW) turns through note values, 1/64 to 1/2 with triplets (T) and dotted "
+           "(D), following MIDI clock while it runs, else the arpeggiator's SPD; the tempo shows at the top right. "
+           "The delay's repeats are filtered by TONE, lose their lowest lows and saturate rather than run away.",
+           small))
+S.append(P("<b>The mask shaper</b> applies the oscillators' idea to the sound itself: the signal's level "
+           "becomes the phase of a masked sine. Mask 31 is a gentle sine fold; every other mask is a transfer curve "
+           "of its own, its pieces repeated, reversed, inverted or silenced, folded over the signal as DRIVE pushes "
+           "it further round the cycle. BIAS moves where the signal sits on it. It runs at four times the rate."))
+S.append(P("<b>The mask slicer</b> applies it to time: it keeps the last WINDOW of sound and plays it back "
+           "cut into the 32 sections of a cycle, put together as the mask reads the sine. Mask 31 plays the window "
+           "as it was, one window late; 15 its first half twice; 7 its first quarter four times (a stutter); FLIP "
+           "plays sections backwards, INVERT turns them over, SILENCE gates them, REPEAT plays the pieces three "
+           "times as fast. Where a section does not follow on from the last, the cut is faded over FADE. "
+           "Synced, it is a rhythmic glitch."))
 S.append(P("ARP", h2))
 S.append(knobs([["1", "TYPE", "SPD 20–400 BPM", "HOLD OFF / ON", "TRIG OFF / ON"]]))
 S.append(Spacer(1, 5))
@@ -601,7 +627,7 @@ S.append(table([["Section", "CC: value"],
                 ["LFO 2", "108 AMT, 109 SPD, 110 DEST, 111 WAVE, 112 DLAY, 113 DCAY"],
                 ["MATRIX", "the rows' amounts: 102–107 rows 1–6, 117 row 7, 118 row 8"],
                 ["GENERAL", "3 MODE, 7 VOL, 12 SEMI, 5 PORT, 8 PANS, 9 RATE, 13 BEND"],
-                ["FX", "94 1TYP, 93 1BAL, 95 2TYP, 91 2BAL"],
+                ["FX", "94 FX1 TYPE, 93 FX1 MIX, 95 FX2 TYPE, 91 FX2 MIX; FX 1's six settings 54–59, FX 2's 60–65"],
                 ["ARP", "88 TYPE, 89 SPD, 90 HOLD, 92 TRIG"],
                 ["The part", "1 mod wheel, 64 sustain, 120 and 123 all off"]],
                [26 * mm, W - 26 * mm]))
@@ -633,8 +659,8 @@ for t in ["One part: the MASK1's multitimbral parts, layers and splits are not i
           "The 40 factory sounds are MASQUE's own.",
           "The filter goes further than the MASK1's: DRIVE, a PEAK mode and a tuned comb; MASQUE has its own CC map.",
           "A modulation matrix in place of the MASK1's three routings, MPE, and alternate tunings.",
-          "The effect families and numbering follow the MASK1; the effects themselves are MASQUE's own designs, "
-          "the reverb a plate.",
+          "Twelve effects of MASQUE's own in either slot, each with its own settings, where the MASK1 has fixed "
+          "numbered types; the reverb a plate.",
           "The looper keeps 4096 events (the MASK1 10,000)."]:
     S.append(P("•  " + t, ParagraphStyle("bl", parent=body, leftIndent=10, firstLineIndent=-8, spaceAfter=3)))
 S.append(Spacer(1, 8))

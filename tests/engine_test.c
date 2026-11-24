@@ -13,6 +13,7 @@
 #include <time.h>
 #include "masque.h"
 #include "presets.h"
+#include "engine.h"
 
 #define FS MQ_FS
 #define BL 256u
@@ -421,6 +422,153 @@ static void matrix(void)
     printf("matrix: velocity on the level, the keys' pressure on the mask\n");
 }
 
+
+/* the effects alone: every type finite and bounded; the delay's sync; the slicer at mask 31 the window, late; the
+ * mask shaper at mask 31 and little drive nearly the signal */
+static float fl[1 << 17], fr[1 << 17], gl[1 << 17], gr[1 << 17];
+static void fx_run(const fx_ctl_t *c, uint32_t n)
+{
+    uint32_t i;
+    for (i = 0; i < n; i += BL)
+        fx_process(fl + i, fr + i, n - i < BL ? n - i : BL, c);
+}
+static void fx_src(uint32_t n, int kind)
+{
+    uint32_t i, rng = 1;
+    for (i = 0; i < n; i++) {
+        float x = 0.0f;
+        rng = rng * 1664525u + 1013904223u;
+        if (kind == 0)                         /* a chord with noise, coming and going */
+            x = (0.25f * sinf(6.2831853f * 220.0f * i / FS) + 0.2f * sinf(6.2831853f * 331.0f * i / FS) +
+                 0.1f * ((float)(rng >> 8) / 8388608.0f - 1.0f)) * ((i / 8000u) & 1u ? 1.0f : 0.3f);
+        else if (kind == 1)
+            x = i == 1000u ? 1.0f : 0.0f;
+        else if (kind == 2)
+            x = 0.2f * sinf(6.2831853f * 441.0f * i / FS);
+        fl[i] = gl[i] = x;
+        fr[i] = gr[i] = x;
+    }
+}
+static double corr(const float *a, const float *b, uint32_t n)
+{
+    double ab = 0, aa = 0, bb = 0;
+    uint32_t i;
+    for (i = 0; i < n; i++) { ab += a[i] * b[i]; aa += a[i] * a[i]; bb += b[i] * b[i]; }
+    return ab / sqrt(aa * bb + 1e-30);
+}
+static void fx_set1(fx_ctl_t *c, int k, int t, float mix)
+{
+    c->t[k] = t;
+    c->mix[k] = mix;
+    masque_fx_defaults(t, c->p[k]);
+}
+static void effects(void)
+{
+    fx_ctl_t c;
+    int k, t;
+    uint32_t n = 88200, i;
+    for (k = 0; k < 2; k++)                    /* every effect, in either slot: bounded, not silent */
+        for (t = 1; t < NEFX; t++) {
+            float pk = 0.0f;
+            memset(&c, 0, sizeof c);
+            fx_init();
+            c.bpm = 120.0f;
+            fx_set1(&c, k, t, 1.0f);
+            fx_src(n, 0);
+            fx_run(&c, n);
+            for (i = 0; i < n; i++) {
+                if (!isfinite(fl[i]) || !isfinite(fr[i])) pk = 1e9f;
+                if (fabsf(fl[i]) > pk) pk = fabsf(fl[i]);
+                if (fabsf(fr[i]) > pk) pk = fabsf(fr[i]);
+            }
+            CHECK(pk < 3.0f, "FX%d %s peak %.2f", k + 1, masque_fx_long(t), pk);
+            CHECK(rms(fl + n / 2, n / 2) > 0.005, "FX%d %s silent", k + 1, masque_fx_long(t));
+        }
+    /* every knob of every effect at its ends: still bounded */
+    for (t = 1; t < NEFX; t++) {
+        int end, kk;
+        for (end = 0; end < 2; end++) {
+            float pk = 0.0f;
+            memset(&c, 0, sizeof c);
+            fx_init();
+            c.bpm = 300.0f;
+            fx_set1(&c, 0, t, 1.0f);
+            for (kk = 0; kk < MQ_FX_K; kk++) {
+                mq_fxk_t d;
+                if (masque_fx_knob(t, kk, c.p[0], &d))
+                    masque_fx_set(&d, c.p[0], end ? d.hi : d.lo);
+            }
+            fx_src(n / 2, 0);
+            fx_run(&c, n / 2);
+            for (i = 0; i < n / 2; i++) {
+                if (!isfinite(fl[i])) pk = 1e9f;
+                if (fabsf(fl[i]) > pk) pk = fabsf(fl[i]);
+            }
+            CHECK(pk < 6.0f, "%s at its %s: peak %.2f", masque_fx_long(t), end ? "top" : "bottom", pk);
+        }
+    }
+    CHECK(!masque_fx_allowed(E_SLICER, E_DELAY) && !masque_fx_allowed(E_FLANGER, E_CHORUS) &&
+          !masque_fx_allowed(E_PLATE, E_PLATE) && masque_fx_allowed(E_DIST, E_DIST) &&
+          masque_fx_allowed(E_DELAY, E_PLATE), "the effects' memory rules");
+    /* the delay: a quarter at 120 BPM is 0.5 s */
+    memset(&c, 0, sizeof c);
+    fx_init();
+    c.bpm = 120.0f;
+    fx_set1(&c, 1, E_DELAY, 1.0f);
+    c.p[1][1] = 0; c.p[1][2] = 1; c.p[1][6] = 10; c.p[1][4] = 99;
+    fx_src(n, 3);                              /* silence first, for the time to settle */
+    fx_run(&c, n);
+    fx_src(n, 1);
+    fx_run(&c, n);
+    {
+        uint32_t at = 0;
+        float pk = 0.0f;
+        for (i = 0; i < n; i++)
+            if (fabsf(fl[i]) > pk) { pk = fabsf(fl[i]); at = i; }
+        CHECK(at > 1000u + 22058u - 40u && at < 1000u + 22058u + 40u, "delay sync: echo at %u", at - 1000u);
+        printf("effects: all %d bounded in either slot; delay 1/4 at 120 BPM echoes after %.1f ms", NEFX - 1,
+               (at - 1000u) * 1000.0 / FS);
+    }
+    /* the slicer, mask 31: the window, one window late */
+    memset(&c, 0, sizeof c);
+    fx_init();
+    c.bpm = 120.0f;
+    fx_set1(&c, 1, E_SLICER, 1.0f);
+    c.p[1][0] = 31; c.p[1][1] = 0; c.p[1][4] = 99;
+    fx_run(&c, 4096);                          /* the fade in from OFF */
+    fx_src(n, 0);
+    fx_run(&c, n);
+    {
+        uint32_t W = (uint32_t)(4.0f * exp2f((float)c.p[1][2] / 13.2f) * 0.001f * FS), best = 0;
+        double bc = -2.0, kc;
+        for (i = W - 30; i < W + 30; i++) {
+            kc = corr(fl + 20000 + i, gl + 20000, 40000);
+            if (kc > bc) { bc = kc; best = i; }
+        }
+        CHECK(bc > 0.98 && best >= W - 1 && best <= W + 1, "slicer mask 31: %u late, correlation %.3f", best, bc);
+        printf("; slicer mask 31 %u samples late, the window %u (%.3f)", best, W, bc);
+    }
+    /* the mask shaper, mask 31, little drive: the signal, a little rounded */
+    memset(&c, 0, sizeof c);
+    fx_init();
+    c.bpm = 120.0f;
+    fx_set1(&c, 0, E_SHAPER, 1.0f);
+    c.p[0][2] = 0; c.p[0][3] = 0; c.p[0][4] = 99;
+    fx_run(&c, 4096);
+    fx_src(n, 2);
+    fx_run(&c, n);
+    {
+        double bc = -2.0, kc;
+        for (i = 0; i < 40; i++) {
+            kc = corr(fl + 20000 + i, gl + 20000, 40000);
+            if (kc > bc) bc = kc;
+        }
+        CHECK(bc > 0.97, "mask shaper mask 31: correlation %.3f", bc);
+        printf("; shaper mask 31 %.3f\n", bc);
+    }
+    fx_init();
+}
+
 static void cost(void)
 {
     mq_patch_t p;
@@ -428,7 +576,10 @@ static void cost(void)
     struct timespec a, b;
     double ms;
     preset_get(0, &p);
-    p.fx.t2 = F2_RV + 10;
+    p.fx.t1 = E_SHAPER; p.fx.b1 = 40;         /* the dearest pair: the 4x mask shaper and the plate */
+    masque_fx_defaults(p.fx.t1, p.fx.p1);
+    p.fx.t2 = E_PLATE;
+    masque_fx_defaults(p.fx.t2, p.fx.p2);
     masque_panic(); masque_set_patch(&p); run(0, 0, 256);
     for (i = 0; i < 10; i++)
         masque_note_on(48 + 3 * (int)i, 100);
@@ -437,7 +588,7 @@ static void cost(void)
     run(0, 0, (uint32_t)FS * 4);
     clock_gettime(CLOCK_MONOTONIC, &b);
     ms = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) / 1e6;
-    printf("cost: 10 voices + plate, 4 s of sound in %.1f ms on this computer (%.1f %% of real time)\n", ms,
+    printf("cost: 10 voices + mask shaper + plate, 4 s of sound in %.1f ms on this computer (%.1f %% of real time)\n", ms,
            ms / 40.0);
     for (i = 0; i < 10; i++)
         masque_note_off(48 + 3 * (int)i);
@@ -459,6 +610,7 @@ int main(int argc, char **argv)
         tunings();
         mpe();
         matrix();
+        effects();
         cost();
     }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);

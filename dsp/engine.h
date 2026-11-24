@@ -57,17 +57,21 @@ int seq_held_count(void);                   /* physical keys down (for the LFOs'
 
 /* the effects */
 typedef struct {
-    int t1, t2;                             /* type (F1_*, F2_*), after the LFO */
-    float b1, b2;                           /* balance 0..1, after the mods */
+    int t[2];                               /* the slots' effects (E_*) */
+    float mix[2];                           /* their mix 0..1, after the mods */
+    uint8_t p[2][MQ_FX_P];                  /* their settings */
+    float mod[2];                           /* the first setting moved (-1..1: a mask by 128, others by 50) */
+    float bpm;                              /* the tempo SYNC follows */
 } fx_ctl_t;
 void fx_init(void);
 void fx_process(float *l, float *r, uint32_t n, const fx_ctl_t *c);
 void fx_clear(void);
+float seq_tempo(void);                      /* the tempo: MIDI clock's while it runs, else the ARP page's SPD */
 
 /* the plate (plate.c), FX2's reverbs */
 void plate_init(void);
 void plate_clear(void);
-void plate_variant(int v);                  /* 0..15: size and decay */
+void plate_settings(int size, int decay, int damp, int pre);   /* the FX page's 0..99 each */
 void plate_process(const float *in_l, const float *in_r, float *out_l, float *out_r, uint32_t n, float wet);
 
 static inline uint32_t eng_rand(uint32_t *s)

@@ -4,7 +4,8 @@
 
 A bitmask synthesizer for the M-VAVE FM-1, after Kodamo's MASK1: two bitmask oscillators a voice, a sample-and-hold
 noise, a driven, saturating state-variable filter (LP, HP, BP, NOTCH, PEAK, and a tuned comb), four loopable envelopes, mask and pitch delta envelopes, two LFOs, an eight-row modulation matrix in each sound, MPE, KIST's tunings, the
-MASK1's nine play modes with slur detection, an arpeggiator, a looper and two effects. Ten voices (up to twelve),
+MASK1's nine play modes with slur detection, an arpeggiator, a looper and two effects (with the masks applied to
+the sound itself: a mask shaper and a mask slicer). Ten voices (up to twelve),
 forty factory sounds, 128 of your own.
 
 Built on [fm1-base](https://github.com/charlesvestal/fm1-base) (felucca-bsp underneath, MPL-2.0, no closed code),
@@ -137,8 +138,11 @@ A tag `vX.Y`, or running the Build workflow by hand with a version, builds every
 - More than the MASK1: a modulation matrix instead of its three routings, MPE, and tunings.
 - The FM-1 has no wheels: pitch bend and the mod wheel come over MIDI. Its keys' pressure is aftertouch.
 - The factory sounds are MASQUE's own (forty of them), not Kodamo's.
-- The effects are the MASK1's families and numbering (CH, DT, BC, RM; DL, RV, DT), each sixteen of MASQUE's own;
-  the reverbs are KIST-P's plate (Dattorro's) in sixteen sizes.
+- The effects are MASQUE's own: twelve, any of them in either slot, each with up to six settings and a page of its
+  own (the MASK1 has numbered types with fixed settings). Two apply the masks to the sound itself: the mask shaper and
+  the mask slicer. The delay and the tremolo sync to the tempo; the reverb is KIST-P's plate (Dattorro's).
+- Sounds saved by earlier builds are not kept: the effects' settings changed the sound's layout, so the user banks
+  start empty again.
 - The looper keeps 4096 events (the MASK1 10000).
 - The filter has more than the MASK1's: DRIVE, a PEAK mode and a tuned comb.
 - MASQUE's own CC map.
